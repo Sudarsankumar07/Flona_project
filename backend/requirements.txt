@@ -1,0 +1,37 @@
+# Backend Dependencies for Smart B-Roll Inserter
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# File Handling
+python-multipart>=0.0.6
+aiofiles>=23.0.0
+
+# Data Validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# OpenAI API
+openai>=1.6.0
+
+# Google Gemini API
+google-generativeai>=0.3.0
+
+# Video/Audio Processing
+moviepy>=1.0.3
+ffmpeg-python>=0.2.0
+Pillow>=10.1.0
+
+# Embeddings & ML
+numpy>=1.24.0
+scipy>=1.11.0
+
+# HTTP Client (for API calls)
+httpx>=0.25.0
+
+# Async Support
+asyncio-throttle>=1.0.2
