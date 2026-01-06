@@ -30,8 +30,9 @@ Pillow>=10.1.0
 numpy>=1.24.0
 scipy>=1.11.0
 
-# HTTP Client (for API calls)
+# HTTP Client (for API calls and downloads)
 httpx>=0.25.0
+aiohttp>=3.9.0
 
 # Async Support
 asyncio-throttle>=1.0.2

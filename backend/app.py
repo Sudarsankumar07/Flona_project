@@ -6,6 +6,7 @@ Main application entry point with all API endpoints
 import time
 from pathlib import Path
 from typing import List, Optional
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
@@ -26,7 +27,7 @@ from schemas import (
     BRollCaptionsResponse,
     UploadResponse,
 )
-from ingestion import ArollIngestor, BrollIngestor
+from ingestion import ArollIngestor, BrollIngestor, VideoDownloader
 from transcription import Transcriber
 from understanding import BRollCaptioner, EmbeddingGenerator
 from matching import SemanticMatcher
@@ -110,6 +111,7 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "endpoints": {
+            "process_from_urls": "POST /api/process-from-urls  ← Use this! (reads video_url.json)",
             "upload_aroll": "POST /api/upload/aroll",
             "upload_broll": "POST /api/upload/broll",
             "transcribe": "POST /api/transcribe",
@@ -542,6 +544,195 @@ async def download_rendered_video():
         filename=latest.name,
         media_type="video/mp4"
     )
+
+
+# ============================================================================
+# URL-Based Processing (from video_url.json)
+# ============================================================================
+
+@app.post("/api/process-from-urls")
+async def process_from_urls(json_path: Optional[str] = None):
+    """
+    Complete pipeline using videos from video_url.json
+    
+    1. Downloads A-roll and B-roll videos from URLs
+    2. Transcribes A-roll
+    3. Captions B-roll clips
+    4. Generates embeddings
+    5. Matches semantically
+    6. Creates timeline plan
+    
+    Args:
+        json_path: Optional custom path to video_url.json
+    """
+    state.processing_start_time = time.time()
+    
+    print("=" * 50)
+    print("PROCESSING FROM URL JSON")
+    print("=" * 50)
+    
+    # Step 1: Download videos from URLs
+    print("\n[1/6] Downloading videos from URLs...")
+    downloader = VideoDownloader()
+    
+    try:
+        download_results = await downloader.download_from_json(json_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download videos: {str(e)}")
+    
+    if not download_results["aroll"]:
+        raise HTTPException(status_code=400, detail="No A-roll URL found in JSON")
+    
+    if not download_results["brolls"]:
+        raise HTTPException(status_code=400, detail="No B-roll URLs found in JSON")
+    
+    # Update state with downloaded files
+    state.aroll_path = download_results["aroll"]["path"]
+    state.aroll_duration = downloader.get_video_duration(state.aroll_path)
+    state.aroll_filename = Path(state.aroll_path).name
+    
+    print(f"  A-roll: {state.aroll_filename} ({state.aroll_duration:.1f}s)")
+    print(f"  B-rolls: {len(download_results['brolls'])} clips downloaded")
+    
+    # Step 2: Transcribe A-roll
+    print("\n[2/6] Transcribing A-roll...")
+    transcriber = Transcriber()
+    
+    existing_transcript = transcriber.load_transcript(state.aroll_path)
+    if existing_transcript:
+        state.transcript_segments = existing_transcript
+        print(f"  Loaded existing transcript ({len(existing_transcript)} segments)")
+    else:
+        state.transcript_segments = await transcriber.transcribe(state.aroll_path)
+        print(f"  Transcribed: {len(state.transcript_segments)} segments")
+    
+    # Step 3: Prepare B-roll info and caption them
+    print("\n[3/6] Captioning B-roll clips...")
+    
+    # Build broll_files list for captioner
+    broll_files = []
+    for broll in download_results["brolls"]:
+        duration = downloader.get_video_duration(broll["path"])
+        broll_files.append({
+            "broll_id": broll["broll_id"],
+            "filename": broll["filename"],
+            "filepath": broll["path"],
+            "duration": duration,
+            "metadata": broll.get("metadata", "")
+        })
+    
+    captioner = BRollCaptioner()
+    
+    # Check for existing captions
+    existing_captions = captioner.load_captions()
+    if existing_captions and len(existing_captions) == len(broll_files):
+        state.broll_descriptions = existing_captions
+        print(f"  Loaded existing captions ({len(existing_captions)} clips)")
+    else:
+        # Use metadata if available, otherwise generate with AI
+        state.broll_descriptions = await caption_with_metadata(captioner, broll_files)
+        print(f"  Captioned: {len(state.broll_descriptions)} clips")
+    
+    # Step 4: Generate embeddings
+    print("\n[4/6] Generating embeddings...")
+    embedder = EmbeddingGenerator()
+    
+    state.transcript_embeddings = await embedder.embed_transcript_segments(
+        state.transcript_segments
+    )
+    print(f"  Transcript embeddings: {len(state.transcript_embeddings)}")
+    
+    state.broll_embeddings = await embedder.embed_broll_descriptions(
+        state.broll_descriptions
+    )
+    print(f"  B-roll embeddings: {len(state.broll_embeddings)}")
+    
+    # Step 5: Compute similarity and match
+    print("\n[5/6] Finding semantic matches...")
+    state.similarity_matrix = embedder.compute_similarity_matrix(
+        state.transcript_embeddings,
+        state.broll_embeddings
+    )
+    
+    matcher = SemanticMatcher()
+    state.selected_matches = matcher.find_best_matches(
+        state.transcript_segments,
+        state.broll_descriptions,
+        state.similarity_matrix
+    )
+    print(f"  Selected matches: {len(state.selected_matches)}")
+    
+    # Step 6: Generate timeline
+    print("\n[6/6] Generating timeline plan...")
+    planner = TimelinePlanner()
+    state.timeline = planner.generate_timeline(
+        aroll_filename=state.aroll_filename,
+        aroll_duration=state.aroll_duration,
+        segments=state.transcript_segments,
+        broll_descriptions=state.broll_descriptions,
+        selected_matches=state.selected_matches,
+        processing_start_time=state.processing_start_time
+    )
+    
+    # Validate
+    validation = planner.validate_timeline(state.timeline)
+    
+    print("\n" + "=" * 50)
+    print("PROCESSING COMPLETE!")
+    print(f"  Total time: {state.timeline.processing_time_sec:.1f}s")
+    print(f"  Insertions: {state.timeline.total_insertions}")
+    print("=" * 50)
+    
+    return {
+        "success": True,
+        "message": "Processing complete",
+        "downloads": {
+            "aroll": download_results["aroll"]["path"],
+            "broll_count": len(download_results["brolls"])
+        },
+        "timeline": state.timeline.model_dump(),
+        "validation": validation,
+        "processing_time_sec": state.timeline.processing_time_sec
+    }
+
+
+async def caption_with_metadata(captioner: BRollCaptioner, broll_files: list) -> list:
+    """
+    Caption B-roll clips, using metadata from JSON if available
+    Falls back to AI captioning if no metadata
+    """
+    from schemas import BRollDescription
+    
+    descriptions = []
+    
+    for broll in broll_files:
+        metadata = broll.get("metadata", "").strip()
+        
+        if metadata:
+            # Use provided metadata as description
+            descriptions.append(BRollDescription(
+                broll_id=broll["broll_id"],
+                filename=broll["filename"],
+                description=metadata,
+                duration=broll["duration"],
+                filepath=broll["filepath"]
+            ))
+            print(f"    {broll['broll_id']}: Using metadata")
+        else:
+            # Generate with AI
+            desc = await captioner.caption_single(
+                filepath=broll["filepath"],
+                broll_id=broll["broll_id"],
+                filename=broll["filename"],
+                duration=broll["duration"]
+            )
+            descriptions.append(desc)
+            print(f"    {broll['broll_id']}: AI generated")
+    
+    # Save captions
+    captioner._save_captions(descriptions)
+    
+    return descriptions
 
 
 # ============================================================================
