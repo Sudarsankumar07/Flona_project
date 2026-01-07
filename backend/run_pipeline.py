@@ -123,11 +123,14 @@ async def main():
             "metadata": broll.get("metadata", "")
         })
     
-    # Use metadata from JSON (pre-provided descriptions)
+    # Use metadata from JSON if provided, otherwise use OFFLINE captioning (BLIP)
     broll_descriptions = []
+    captioner = BRollCaptioner(provider="offline")  # Always use offline BLIP for captioning
+    
     for broll in broll_files:
         metadata = broll.get("metadata", "").strip()
         if metadata:
+            # Use provided metadata as description
             broll_descriptions.append(BRollDescription(
                 broll_id=broll["broll_id"],
                 filename=broll["filename"],
@@ -137,8 +140,7 @@ async def main():
             ))
             print(f"  ✓ {broll['broll_id']}: Using provided metadata")
         else:
-            # Would call AI here if no metadata
-            captioner = BRollCaptioner()
+            # Generate caption using offline BLIP model
             desc = await captioner.caption_single(
                 filepath=broll["filepath"],
                 broll_id=broll["broll_id"],
@@ -146,7 +148,7 @@ async def main():
                 duration=broll["duration"]
             )
             broll_descriptions.append(desc)
-            print(f"  ✓ {broll['broll_id']}: AI generated caption")
+            print(f"  ✓ {broll['broll_id']}: Generated caption with BLIP")
     
     # =========================================================================
     # Step 4: AI-Powered Insertion Planning (skip embeddings for AI mode)

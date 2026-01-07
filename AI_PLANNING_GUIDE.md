@@ -2,18 +2,42 @@
 
 ## Overview
 
-The system now supports **two insertion planning modes**:
+The system uses a **hybrid architecture** combining the best of both worlds:
 
-1. **AI-Powered Planning** (Gemini/OpenAI) - **RECOMMENDED** ⭐
-   - Uses AI to analyze transcript and B-roll descriptions
-   - Intelligently decides where to insert B-rolls with reasoning
-   - Handles cross-language matching (Urdu/Hindi → English)
-   - More accurate and context-aware
+1. **Local Models** (BLIP + Whisper) - Free captioning & transcription
+2. **AI Planning** (Gemini/OpenAI) - Intelligent insertion decisions
 
-2. **Offline Embedding Mode** (BLIP + sentence-transformers)
-   - Pure vector similarity matching
-   - Works without API keys
-   - Good for same-language matching
+### 🏗️ Architecture Flow
+
+```
+B-roll Videos → BLIP (local) → Captions
+A-roll Video → Whisper (local) → Transcript
+                    ↓
+        Both sent to Gemini AI
+                    ↓
+    AI analyzes & plans insertions
+                    ↓
+        Timeline JSON output
+```
+
+### ✅ Benefits
+
+- **Cost-Effective**: Only use API for insertion planning, not captioning/transcription
+- **Accurate**: BLIP generates detailed B-roll descriptions
+- **Cross-Language**: AI understands Urdu/Hindi transcript + English captions
+- **Context-Aware**: AI makes intelligent decisions, not just similarity matching
+
+### ⚠️ vs Pure Offline Mode
+
+**Pure Offline** (OLD):
+- BLIP captions → Embeddings → Similarity matching
+- ❌ Can't handle cross-language
+- ❌ No reasoning/context
+
+**Hybrid AI** (NEW):
+- BLIP captions → Gemini analyzes → Smart insertions
+- ✅ Cross-language support
+- ✅ Reasoning included
 
 ---
 
@@ -50,13 +74,14 @@ python check_gemini_models.py
 Edit `backend/.env`:
 
 ```env
-# AI-Powered Planning
+# Hybrid Architecture
 API_PROVIDER=gemini
 GEMINI_API_KEY=your_actual_key_here
 
-# Use offline transcription (or gemini if available)
+# Offline models for captioning & transcription
 TRANSCRIPTION_PROVIDER=offline
 OFFLINE_WHISPER_MODEL=base
+OFFLINE_VISION_MODEL=blip
 
 # Pipeline Settings
 SIMILARITY_THRESHOLD=0.65
@@ -72,60 +97,66 @@ python run_pipeline.py
 
 **New Output:**
 ```
+[3/6] CAPTIONING B-ROLL CLIPS
+------------------------------------------------------------
+  ✓ broll_1: Generated caption with BLIP
+  ✓ broll_2: Generated caption with BLIP
+  ...
+
 [4/6] AI-POWERED INSERTION PLANNING
 ------------------------------------------------------------
 🤖 Using AI (gemini) to plan insertions...
 ✓ Using Gemini model: gemini-2.0-flash-exp
 ✓ AI suggested 4 insertions
-
-  ⏭ Skipping embedding generation (using AI planning)
-  ⏭ Skipping semantic matching (using AI planning)
 ```
 
 ---
 
 ## 🎯 How AI Planning Works
 
-### Traditional Embedding Approach (Old)
+### Hybrid Architecture (Correct)
 ```
-Transcript: "Mumbai jesi city mein..."
-↓ (Whisper transcribes to Urdu script)
-↓ (Embed to vector)
-↓ (Compare with B-roll vectors)
-↓ (Low similarity due to language mismatch)
-✗ No matches found
-```
-
-### AI Planning Approach (New)
-```
+B-roll Videos
+  ↓ (BLIP vision model - offline)
+B-roll Captions: "Mumbai street food stall, utensils visible..."
+  
+A-roll Video  
+  ↓ (Whisper - offline)
 Transcript: "آپ کو پتہ ہے؟ مومبہی جسی سٹی میں..."
-B-roll: "Mumbai street food context shot..."
-↓ (Send both to Gemini/GPT-4)
-↓ (AI understands: "Mumbai" mentioned, matches with B-roll)
-↓ (AI reasons: "Insert street food B-roll when Mumbai is mentioned")
-✓ Perfect match with reasoning
+
+Both → Gemini AI
+  ↓ (AI understands both languages + context)
+  ↓ (AI reasons: "Mumbai mentioned → street food B-roll fits")
+  
+Insertions with reasoning ✓
 ```
 
-### AI Prompt Structure
+### What AI Receives
 
-The AI receives:
+The AI gets:
 ```
-TRANSCRIPT:
+TRANSCRIPT (from Whisper):
 [0.0s - 1.0s] آپ کو پتہ ہے?
 [1.0s - 4.2s] مومبہی جسی سٹی میں...
-[4.2s - 5.8s] ٹائم کم ہوتا ہے...
 
-AVAILABLE B-ROLLS:
-broll_1: Mumbai street food context shot... (5.2s)
-broll_2: Indoor shot of takeaway food containers... (4.8s)
+B-ROLL CAPTIONS (from BLIP):
+broll_1: "An empty street food stall with cooking utensils on the counter, signboards visible in background" (5.2s)
+broll_2: "Food containers on a table near window with natural daylight" (4.8s)
 
-RULES:
-- Maximum 6 insertions
-- Minimum 8 seconds between insertions
-- Insert during natural pauses
-- Never interrupt important moments
+AI Task: Decide where to insert each B-roll
+```
 
-OUTPUT: JSON with insertions
+**AI Response:**
+```json
+{
+  "insertions": [
+    {
+      "start_sec": 1.5,
+      "broll_id": "broll_1",
+      "reason": "Speaker mentions Mumbai city, showing street food context"
+    }
+  ]
+}
 ```
 
 ---
