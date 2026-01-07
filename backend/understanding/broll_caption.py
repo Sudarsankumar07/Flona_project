@@ -1,7 +1,7 @@
 """
 B-Roll Caption Module
 Generates text descriptions of B-roll video clips using vision models
-Supports both OpenAI GPT-4 Vision and Google Gemini Vision
+Supports OpenAI GPT-4 Vision, Google Gemini Vision, and Offline Models
 """
 
 import os
@@ -30,7 +30,7 @@ from schemas import BRollDescription
 class BRollCaptioner:
     """
     Generates text descriptions for B-roll video clips
-    Supports OpenAI GPT-4V and Google Gemini Vision
+    Supports OpenAI GPT-4V, Google Gemini Vision, and Offline Models
     """
     
     def __init__(self, provider: Optional[str] = None):
@@ -38,14 +38,17 @@ class BRollCaptioner:
         Initialize captioner with specified provider
         
         Args:
-            provider: "openai" or "gemini". If None, auto-detects from config.
+            provider: "openai", "gemini", or "offline". If None, auto-detects from config.
         """
         self.provider = provider or get_vision_provider()
         self.output_dir = CAPTIONS_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize appropriate client
-        if self.provider == "openai":
+        if self.provider == "offline":
+            print("  Using offline vision model for captioning")
+            # Offline mode doesn't need initialization
+        elif self.provider == "openai":
             from openai import OpenAI
             self.client = OpenAI(api_key=OPENAI_API_KEY)
         elif self.provider == "gemini":
@@ -98,14 +101,30 @@ class BRollCaptioner:
         Returns:
             BRollDescription object
         """
-        # Extract frames from video for analysis
-        frames = self._extract_frames(filepath, num_frames=3)
-        
         try:
-            if self.provider == "openai":
-                description_text = await self._caption_openai(frames, filename)
+            if self.provider == "offline":
+                # Use offline vision model
+                description_text = await self._caption_offline(filepath, filename)
+            elif self.provider == "openai":
+                # Extract frames from video for analysis
+                frames = self._extract_frames(filepath, num_frames=3)
+                try:
+                    description_text = await self._caption_openai(frames, filename)
+                finally:
+                    # Cleanup temp frame files
+                    for frame in frames:
+                        if os.path.exists(frame):
+                            os.remove(frame)
             else:
-                description_text = await self._caption_gemini(filepath, frames, filename)
+                # Gemini
+                frames = self._extract_frames(filepath, num_frames=3)
+                try:
+                    description_text = await self._caption_gemini(filepath, frames, filename)
+                finally:
+                    # Cleanup temp frame files
+                    for frame in frames:
+                        if os.path.exists(frame):
+                            os.remove(frame)
             
             return BRollDescription(
                 broll_id=broll_id,
@@ -115,11 +134,15 @@ class BRollCaptioner:
                 filepath=filepath
             )
             
-        finally:
-            # Cleanup temp frame files
-            for frame in frames:
-                if os.path.exists(frame):
-                    os.remove(frame)
+        except Exception as e:
+            print(f"  [WARNING] Caption error for {filename}: {e}")
+            return BRollDescription(
+                broll_id=broll_id,
+                filename=filename,
+                description=f"B-roll video clip: {filename}",
+                duration=duration,
+                filepath=filepath
+            )
     
     def _extract_frames(self, video_path: str, num_frames: int = 3) -> List[str]:
         """
@@ -384,6 +407,24 @@ Example: "Close-up of hands pouring freshly brewed coffee into a ceramic mug wit
         )
         
         return response.text.strip()
+    
+    async def _caption_offline(self, video_path: str, filename: str) -> str:
+        """
+        Generate caption using offline vision model
+        
+        Args:
+            video_path: Path to video file
+            filename: Original filename for context
+            
+        Returns:
+            Description text
+        """
+        from understanding.offline_models import caption_video
+        
+        # Use offline captioning
+        description = caption_video(video_path)
+        
+        return description
     
     def _save_captions(self, descriptions: List[BRollDescription]):
         """Save all captions to JSON file"""

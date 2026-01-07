@@ -1,7 +1,7 @@
 """
 Transcription Module
 Converts A-roll video speech to timestamped text segments
-Supports both OpenAI Whisper and Google Gemini for transcription
+Supports OpenAI Whisper API, Google Gemini, and Offline Whisper
 """
 
 import os
@@ -37,7 +37,7 @@ def is_ffmpeg_available() -> bool:
 class Transcriber:
     """
     Transcribes A-roll video to timestamped text segments
-    Supports OpenAI Whisper API and Google Gemini
+    Supports OpenAI Whisper API, Google Gemini, and Offline Whisper
     """
     
     def __init__(self, provider: Optional[str] = None):
@@ -45,24 +45,28 @@ class Transcriber:
         Initialize transcriber with specified provider
         
         Args:
-            provider: "openai" or "gemini". If None, uses config default.
+            provider: "openai", "gemini", or "offline". If None, uses config default.
         """
         self.provider = provider or TRANSCRIPTION_PROVIDER
         self.output_dir = TRANSCRIPTS_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ffmpeg_available = is_ffmpeg_available()
         
-        # If ffmpeg not available and provider is openai, switch to gemini
+        # Handle offline mode
+        if self.provider == "offline":
+            print("  Using offline Whisper model for transcription")
+            # Offline mode doesn't need initialization
+            return
+        
+        # If ffmpeg not available and provider is openai, switch to gemini or offline
         if not self.ffmpeg_available and self.provider == "openai":
             if GEMINI_API_KEY:
                 print("  ⚠ ffmpeg not found, switching to Gemini for transcription")
                 self.provider = "gemini"
             else:
-                raise RuntimeError(
-                    "ffmpeg is required for OpenAI Whisper transcription.\n"
-                    "Either install ffmpeg or set GEMINI_API_KEY for Gemini transcription.\n"
-                    "Download ffmpeg from: https://ffmpeg.org/download.html"
-                )
+                print("  ⚠ ffmpeg not found, switching to offline Whisper")
+                self.provider = "offline"
+                return
         
         # Initialize appropriate client
         if self.provider == "openai":
@@ -87,7 +91,10 @@ class Transcriber:
         Returns:
             List of TranscriptSegment objects
         """
-        if self.provider == "openai":
+        if self.provider == "offline":
+            # Use offline Whisper
+            segments = await self._transcribe_offline(video_path)
+        elif self.provider == "openai":
             # Extract audio from video (requires ffmpeg)
             audio_path = self._extract_audio(video_path)
             
@@ -321,6 +328,34 @@ Start transcribing now:"""
                 end=duration if duration > 0 else 60.0,
                 text=response.text.strip()
             )]
+    
+    async def _transcribe_offline(self, video_path: str) -> List[TranscriptSegment]:
+        """
+        Transcribe using offline Whisper model
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            List of TranscriptSegment objects
+        """
+        from understanding.offline_models import transcribe_video
+        
+        print("    Transcribing with offline Whisper...")
+        
+        # Use offline transcription
+        segments_data = transcribe_video(video_path)
+        
+        segments = []
+        for idx, seg in enumerate(segments_data):
+            segments.append(TranscriptSegment(
+                id=idx + 1,
+                start=float(seg.get('start', 0)),
+                end=float(seg.get('end', 0)),
+                text=seg.get('text', '').strip()
+            ))
+        
+        return segments
     
     def _get_video_duration(self, video_path: str) -> float:
         """Get video duration using ffprobe"""

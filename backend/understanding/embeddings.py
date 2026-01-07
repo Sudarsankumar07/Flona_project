@@ -1,7 +1,7 @@
 """
 Embeddings Module
 Converts text to vector embeddings for semantic matching
-Supports both OpenAI and Google Gemini embedding models
+Supports OpenAI, Google Gemini, and Offline embedding models
 """
 
 import json
@@ -27,7 +27,7 @@ from schemas import TranscriptSegment, BRollDescription
 class EmbeddingGenerator:
     """
     Generates text embeddings for semantic matching
-    Supports OpenAI and Google Gemini embedding models
+    Supports OpenAI, Google Gemini, and Offline embedding models
     """
     
     def __init__(self, provider: Optional[str] = None):
@@ -35,14 +35,18 @@ class EmbeddingGenerator:
         Initialize embedding generator
         
         Args:
-            provider: "openai" or "gemini". If None, auto-detects from config.
+            provider: "openai", "gemini", or "offline". If None, auto-detects from config.
         """
         self.provider = provider or get_embedding_provider()
         self.embeddings_dir = ARTIFACTS_DIR / "embeddings"
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize appropriate client
-        if self.provider == "openai":
+        if self.provider == "offline":
+            print("  Using offline embedding model")
+            self.model = "sentence-transformers"
+            self.embedding_dim = 384  # all-MiniLM-L6-v2 dimension
+        elif self.provider == "openai":
             from openai import OpenAI
             self.client = OpenAI(api_key=OPENAI_API_KEY)
             self.model = OPENAI_EMBEDDING_MODEL
@@ -116,7 +120,9 @@ class EmbeddingGenerator:
         Returns:
             List of embedding vectors
         """
-        if self.provider == "openai":
+        if self.provider == "offline":
+            return await self._embed_offline(texts)
+        elif self.provider == "openai":
             return await self._embed_openai(texts)
         else:
             return await self._embed_gemini(texts)
@@ -164,6 +170,15 @@ class EmbeddingGenerator:
                             raise
                     else:
                         raise
+        
+        return embeddings
+    
+    async def _embed_offline(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings using offline sentence-transformers"""
+        from understanding.offline_models import get_embeddings
+        
+        # Use offline embedding
+        embeddings = get_embeddings(texts)
         
         return embeddings
     

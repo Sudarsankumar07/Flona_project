@@ -7,7 +7,7 @@
 ### Prerequisites
 - Python 3.9+
 - ffmpeg installed and in PATH
-- API key (Gemini FREE or OpenAI)
+- **API key (Gemini FREE or OpenAI)** OR **Run in Offline Mode** (see below)
 
 ### Installation
 
@@ -32,6 +32,30 @@ cp .env.example .env
 See [API_CREDITS_GUIDE.md](API_CREDITS_GUIDE.md) for free API setup.
 
 **TL;DR**: Use Google Gemini - it's 100% FREE!
+
+### 🌐 Offline Mode (No API Keys Required!)
+
+**NEW**: Run the entire pipeline without any API keys using local HuggingFace models!
+
+```bash
+# Edit .env file
+API_PROVIDER=offline
+TRANSCRIPTION_PROVIDER=offline
+OFFLINE_VISION_MODEL=blip
+OFFLINE_EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
+
+**What's included:**
+- **Vision**: BLIP model (~1GB) for B-roll captioning
+- **Embeddings**: sentence-transformers (384-dim) for semantic matching
+- **Transcription**: Optional Whisper model for A-roll transcription
+
+**Recommended**: Run on Google Colab with GPU for faster inference (see [colab_runner.ipynb](colab_runner.ipynb))
+
+**Test offline models:**
+```bash
+python backend/test_offline_models.py
+```
 
 ---
 
@@ -172,13 +196,20 @@ Flona_project/
 Edit `backend/.env`:
 
 ```env
-# Use Gemini (FREE) or OpenAI
+# Option 1: Use Gemini (FREE)
 API_PROVIDER=gemini
 GEMINI_API_KEY=your_key_here
 
-# Or use OpenAI
+# Option 2: Use OpenAI
 # API_PROVIDER=openai
 # OPENAI_API_KEY=your_key_here
+
+# Option 3: Use Offline Mode (No API keys!)
+# API_PROVIDER=offline
+# TRANSCRIPTION_PROVIDER=offline
+# OFFLINE_VISION_MODEL=blip
+# OFFLINE_EMBEDDING_MODEL=all-MiniLM-L6-v2
+# OFFLINE_WHISPER_MODEL=base
 
 # Matching settings
 SIMILARITY_THRESHOLD=0.65

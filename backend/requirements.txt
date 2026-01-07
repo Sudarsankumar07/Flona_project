@@ -15,16 +15,18 @@ pydantic-settings>=2.1.0
 # Environment Variables
 python-dotenv>=1.0.0
 
-# OpenAI API
+# OpenAI API (optional - for cloud API)
 openai>=1.6.0
 
-# Google Gemini API
+# Google Gemini API (optional - for cloud API)
 google-generativeai>=0.3.0
+google-genai>=1.0.0
 
 # Video/Audio Processing
 moviepy>=1.0.3
 ffmpeg-python>=0.2.0
 Pillow>=10.1.0
+opencv-python>=4.8.0
 
 # Embeddings & ML
 numpy>=1.24.0
@@ -36,3 +38,22 @@ aiohttp>=3.9.0
 
 # Async Support
 asyncio-throttle>=1.0.2
+
+# =============================================================================
+# OFFLINE MODELS (No API keys required)
+# =============================================================================
+
+# HuggingFace Transformers for Vision Models (BLIP, GIT, etc.)
+transformers>=4.36.0
+torch>=2.0.0
+accelerate>=0.25.0
+
+# Sentence Transformers for Embeddings
+sentence-transformers>=2.2.0
+
+# Offline Whisper for Transcription (optional - large model)
+# Uncomment to enable offline transcription:
+# openai-whisper>=20231117
+
+# HuggingFace Hub
+huggingface-hub>=0.20.0
