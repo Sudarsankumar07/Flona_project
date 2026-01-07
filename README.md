@@ -33,6 +33,34 @@ See [API_CREDITS_GUIDE.md](API_CREDITS_GUIDE.md) for free API setup.
 
 **TL;DR**: Use Google Gemini - it's 100% FREE!
 
+### 🤖 AI-Powered Insertion Planning (Recommended!)
+
+**NEW**: Use Gemini/OpenAI AI to intelligently plan B-roll insertions!
+
+**Why AI Planning?**
+- ✅ Handles cross-language matching (Urdu/Hindi transcript → English B-rolls)
+- ✅ Context-aware decisions with reasoning
+- ✅ Better accuracy than pure embedding similarity
+- ✅ Works with Gemini FREE tier!
+
+**Quick Setup:**
+```bash
+# 1. Get Gemini API key from https://aistudio.google.com/apikey
+
+# 2. Test which models work
+python backend/check_gemini_models.py
+
+# 3. Update .env
+API_PROVIDER=gemini
+GEMINI_API_KEY=your_key_here
+TRANSCRIPTION_PROVIDER=offline  # Use free Whisper
+
+# 4. Run pipeline
+python backend/run_pipeline.py
+```
+
+**See:** [AI_PLANNING_GUIDE.md](AI_PLANNING_GUIDE.md) for complete guide
+
 ### 🌐 Offline Mode (No API Keys Required!)
 
 **NEW**: Run the entire pipeline without any API keys using local HuggingFace models!

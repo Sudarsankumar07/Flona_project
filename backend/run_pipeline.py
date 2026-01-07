@@ -12,12 +12,13 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import BASE_DIR, OUTPUT_DIR, validate_config, get_config_summary
+from config import BASE_DIR, OUTPUT_DIR, validate_config, get_config_summary, API_PROVIDER
 from ingestion import VideoDownloader
 from transcription import Transcriber
 from understanding import BRollCaptioner, EmbeddingGenerator
 from matching import SemanticMatcher
 from planning import TimelinePlanner
+from planning.ai_planner import AIInsertionPlanner
 from schemas import BRollDescription
 
 
@@ -148,48 +149,104 @@ async def main():
             print(f"  ✓ {broll['broll_id']}: AI generated caption")
     
     # =========================================================================
-    # Step 4: Generate embeddings
+    # Step 4: AI-Powered Insertion Planning (skip embeddings for AI mode)
     # =========================================================================
-    print("\n" + "-" * 60)
-    print("[4/6] GENERATING EMBEDDINGS")
-    print("-" * 60)
     
-    embedder = EmbeddingGenerator()
+    # Check if using AI mode (gemini/openai) instead of offline embeddings
+    use_ai_planning = API_PROVIDER in ["gemini", "openai"]
     
-    print("  Embedding transcript segments...")
-    transcript_embeddings = await embedder.embed_transcript_segments(transcript_segments)
-    print(f"  ✓ {len(transcript_embeddings)} transcript embeddings")
+    if use_ai_planning:
+        print("\n" + "-" * 60)
+        print("[4/6] AI-POWERED INSERTION PLANNING")
+        print("-" * 60)
+        
+        try:
+            ai_planner = AIInsertionPlanner(provider=API_PROVIDER)
+            insertions = ai_planner.plan_insertions(
+                segments=transcript_segments,
+                broll_descriptions=broll_descriptions,
+                max_insertions=6,
+                min_gap_seconds=8.0
+            )
+            
+            print(f"  ✓ AI planned {len(insertions)} insertions")
+            
+            # Convert insertions to matches format for timeline generation
+            from schemas import MatchResult
+            selected_matches = []
+            for ins in insertions:
+                # Find the segment that contains this insertion point
+                matching_seg = next(
+                    (seg for seg in transcript_segments 
+                     if seg.start <= ins.start_sec <= seg.end),
+                    transcript_segments[0]
+                )
+                
+                match = MatchResult(
+                    segment_id=matching_seg.id,
+                    segment_text=matching_seg.text,
+                    segment_start=matching_seg.start,
+                    segment_end=matching_seg.end,
+                    best_broll_id=ins.broll_id,
+                    best_broll_description="",
+                    similarity_score=ins.confidence
+                )
+                selected_matches.append(match)
+            
+            # Skip embedding and semantic matching steps
+            print("\n  ⏭ Skipping embedding generation (using AI planning)")
+            print("  ⏭ Skipping semantic matching (using AI planning)")
+            
+        except Exception as e:
+            print(f"\n❌ AI planning failed: {e}")
+            print("   Falling back to offline embedding mode...")
+            use_ai_planning = False
     
-    print("  Embedding B-roll descriptions...")
-    broll_embeddings = await embedder.embed_broll_descriptions(broll_descriptions)
-    print(f"  ✓ {len(broll_embeddings)} B-roll embeddings")
-    
-    # =========================================================================
-    # Step 5: Semantic matching
-    # =========================================================================
-    print("\n" + "-" * 60)
-    print("[5/6] FINDING SEMANTIC MATCHES")
-    print("-" * 60)
-    
-    print("  Computing similarity matrix...")
-    similarity_matrix = embedder.compute_similarity_matrix(
-        transcript_embeddings,
-        broll_embeddings
-    )
-    
-    matcher = SemanticMatcher()
-    selected_matches = matcher.find_best_matches(
-        transcript_segments,
-        broll_descriptions,
-        similarity_matrix
-    )
-    
-    print(f"  ✓ Found {len(selected_matches)} suitable insertion points")
-    
-    # Show matches
-    for match in selected_matches:
-        print(f"    • Segment {match.segment_id} → {match.best_broll_id} "
-              f"(similarity: {match.similarity_score:.0%})")
+    if not use_ai_planning:
+        # Original embedding-based approach
+        # =========================================================================
+        # Step 4: Generate embeddings
+        # =========================================================================
+        print("\n" + "-" * 60)
+        print("[4/6] GENERATING EMBEDDINGS")
+        print("-" * 60)
+        
+        embedder = EmbeddingGenerator()
+        
+        print("  Embedding transcript segments...")
+        transcript_embeddings = await embedder.embed_transcript_segments(transcript_segments)
+        print(f"  ✓ {len(transcript_embeddings)} transcript embeddings")
+        
+        print("  Embedding B-roll descriptions...")
+        broll_embeddings = await embedder.embed_broll_descriptions(broll_descriptions)
+        print(f"  ✓ {len(broll_embeddings)} B-roll embeddings")
+        
+        # =========================================================================
+        # Step 5: Semantic matching
+        # =========================================================================
+        print("\n" + "-" * 60)
+        print("[5/6] FINDING SEMANTIC MATCHES")
+        print("-" * 60)
+        
+        print("  Computing similarity matrix...")
+        similarity_matrix = embedder.compute_similarity_matrix(
+            transcript_embeddings,
+            broll_embeddings
+        )
+        
+        matcher = SemanticMatcher()
+        selected_matches = matcher.find_best_matches(
+            transcript_segments,
+            broll_descriptions,
+            similarity_matrix
+        )
+        
+        print(f"  ✓ Found {len(selected_matches)} suitable insertion points")
+        
+        # Show matches
+        for match in selected_matches:
+            print(f"    • Segment {match.segment_id} → {match.best_broll_id} "
+                  f"(similarity: {match.similarity_score:.0%})")
     
     # =========================================================================
     # Step 6: Generate timeline
