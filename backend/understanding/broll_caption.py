@@ -49,10 +49,9 @@ class BRollCaptioner:
             from openai import OpenAI
             self.client = OpenAI(api_key=OPENAI_API_KEY)
         elif self.provider == "gemini":
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            self.genai = genai
-            self.model = genai.GenerativeModel(GEMINI_VISION_MODEL)
+            # Use new google-genai package
+            from google import genai
+            self.genai_client = genai.Client(api_key=GEMINI_API_KEY)
     
     async def caption_all(self, broll_files: List[dict]) -> List[BRollDescription]:
         """
@@ -270,17 +269,24 @@ Example: "Close-up of hands pouring freshly brewed coffee into a ceramic mug wit
     
     async def _caption_gemini_video(self, video_path: str, filename: str) -> str:
         """Caption using full video with Gemini"""
-        # Upload video
-        video_file = self.genai.upload_file(video_path)
+        import time
+        from google.genai import types
+        from google.genai.errors import ClientError
+        
+        # Upload video using new API
+        with open(video_path, "rb") as f:
+            video_file = self.genai_client.files.upload(
+                file=f,
+                config={"mime_type": "video/mp4"}
+            )
         
         # Wait for processing
-        import time
         max_wait = 60
         waited = 0
         while video_file.state.name == "PROCESSING" and waited < max_wait:
             time.sleep(2)
             waited += 2
-            video_file = self.genai.get_file(video_file.name)
+            video_file = self.genai_client.files.get(name=video_file.name)
         
         if video_file.state.name == "FAILED":
             raise Exception("Video processing failed")
@@ -299,27 +305,60 @@ Be specific and descriptive. Return ONLY the description, nothing else.
 Example: "Close-up of hands pouring freshly brewed coffee into a ceramic mug with steam rising, on a rustic wooden table."
 """
         
-        response = self.model.generate_content([video_file, prompt])
+        # Generate with retry for rate limiting
+        max_retries = 5
+        retry_delay = 15
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.genai_client.models.generate_content(
+                    model=GEMINI_VISION_MODEL,
+                    contents=[
+                        types.Content(
+                            parts=[
+                                types.Part.from_uri(file_uri=video_file.uri, mime_type="video/mp4"),
+                                types.Part.from_text(text=prompt)
+                            ]
+                        )
+                    ]
+                )
+                break
+            except ClientError as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    if attempt < max_retries - 1:
+                        print(f"      Rate limited. Waiting {retry_delay}s before retry...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        raise
+                else:
+                    raise
         
         # Cleanup uploaded file
         try:
-            self.genai.delete_file(video_file.name)
+            self.genai_client.files.delete(name=video_file.name)
         except:
             pass
         
-        return response.text.strip()
+        return response.text.strip() if response else f"B-roll video: {filename}"
     
     async def _caption_gemini_frames(self, frame_paths: List[str], filename: str) -> str:
         """Caption using extracted frames with Gemini"""
-        import PIL.Image
+        import base64
+        from google.genai import types
         
-        # Load images
-        images = []
+        # Load images as base64
+        image_parts = []
         for frame_path in frame_paths:
             if os.path.exists(frame_path):
-                images.append(PIL.Image.open(frame_path))
+                with open(frame_path, "rb") as f:
+                    img_data = base64.b64encode(f.read()).decode("utf-8")
+                image_parts.append(
+                    types.Part.from_bytes(data=base64.b64decode(img_data), mime_type="image/jpeg")
+                )
         
-        if not images:
+        if not image_parts:
             return f"B-roll video clip: {filename}"
         
         prompt = f"""Analyze these frames from a B-roll video clip (filename: {filename}).
@@ -337,9 +376,12 @@ Example: "Close-up of hands pouring freshly brewed coffee into a ceramic mug wit
 """
         
         # Build content with images
-        content = [prompt] + images
+        parts = image_parts + [types.Part.from_text(text=prompt)]
         
-        response = self.model.generate_content(content)
+        response = self.genai_client.models.generate_content(
+            model=GEMINI_VISION_MODEL,
+            contents=[types.Content(parts=parts)]
+        )
         
         return response.text.strip()
     

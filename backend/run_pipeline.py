@@ -59,11 +59,16 @@ async def main():
     download_results = await downloader.download_from_json(str(json_path))
     
     aroll_path = download_results["aroll"]["path"]
-    aroll_duration = downloader.get_video_duration(aroll_path)
     aroll_filename = Path(aroll_path).name
     
-    print(f"\n✓ A-roll: {aroll_filename} ({aroll_duration:.1f}s)")
+    # Duration will be determined after transcription
+    aroll_duration = downloader.get_video_duration(aroll_path)
+    
+    print(f"\n✓ A-roll: {aroll_filename}" + (f" ({aroll_duration:.1f}s)" if aroll_duration > 0 else ""))
     print(f"✓ B-rolls: {len(download_results['brolls'])} clips")
+    
+    if not downloader.ffprobe_available:
+        print("  ⚠ ffprobe not available - duration will be extracted from transcript")
     
     # =========================================================================
     # Step 2: Transcribe A-roll
@@ -79,14 +84,20 @@ async def main():
     if transcript_segments:
         print(f"✓ Loaded cached transcript ({len(transcript_segments)} segments)")
     else:
-        print("  Transcribing with AI...")
+        print(f"  Transcribing with {transcriber.provider}...")
         transcript_segments = await transcriber.transcribe(aroll_path)
         print(f"✓ Transcribed: {len(transcript_segments)} segments")
+    
+    # Get duration from transcript if not available from ffprobe
+    if aroll_duration == 0 and transcript_segments:
+        aroll_duration = max(seg.end for seg in transcript_segments)
+        print(f"  Duration from transcript: {aroll_duration:.1f}s")
     
     # Print transcript preview
     print("\n  Transcript preview:")
     for seg in transcript_segments[:3]:
-        print(f"    [{seg.start:.1f}s-{seg.end:.1f}s] {seg.text[:60]}...")
+        text_preview = seg.text[:60] + "..." if len(seg.text) > 60 else seg.text
+        print(f"    [{seg.start:.1f}s-{seg.end:.1f}s] {text_preview}")
     if len(transcript_segments) > 3:
         print(f"    ... and {len(transcript_segments) - 3} more segments")
     
@@ -101,6 +112,8 @@ async def main():
     broll_files = []
     for broll in download_results["brolls"]:
         duration = downloader.get_video_duration(broll["path"])
+        if duration == 0:
+            duration = 5.0  # Default duration if ffprobe not available
         broll_files.append({
             "broll_id": broll["broll_id"],
             "filename": broll["filename"],
@@ -215,7 +228,8 @@ async def main():
     for ins in timeline.insertions:
         print(f"  [{ins.start_sec:5.1f}s - {ins.start_sec + ins.duration_sec:5.1f}s] "
               f"{ins.broll_filename:<15} (confidence: {ins.confidence:.0%})")
-        print(f"      Context: \"{ins.transcript_text[:50]}...\"")
+        context = ins.transcript_text[:50] + "..." if len(ins.transcript_text) > 50 else ins.transcript_text
+        print(f"      Context: \"{context}\"")
     
     print("\n  " + "-" * 56)
     print(f"  Timeline saved to: {OUTPUT_DIR / 'timeline_latest.json'}")

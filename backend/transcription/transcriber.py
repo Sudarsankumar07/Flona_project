@@ -25,6 +25,15 @@ from config import (
 from schemas import TranscriptSegment
 
 
+def is_ffmpeg_available() -> bool:
+    """Check if ffmpeg is available in PATH"""
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 class Transcriber:
     """
     Transcribes A-roll video to timestamped text segments
@@ -41,6 +50,19 @@ class Transcriber:
         self.provider = provider or TRANSCRIPTION_PROVIDER
         self.output_dir = TRANSCRIPTS_DIR
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.ffmpeg_available = is_ffmpeg_available()
+        
+        # If ffmpeg not available and provider is openai, switch to gemini
+        if not self.ffmpeg_available and self.provider == "openai":
+            if GEMINI_API_KEY:
+                print("  ⚠ ffmpeg not found, switching to Gemini for transcription")
+                self.provider = "gemini"
+            else:
+                raise RuntimeError(
+                    "ffmpeg is required for OpenAI Whisper transcription.\n"
+                    "Either install ffmpeg or set GEMINI_API_KEY for Gemini transcription.\n"
+                    "Download ffmpeg from: https://ffmpeg.org/download.html"
+                )
         
         # Initialize appropriate client
         if self.provider == "openai":
@@ -51,9 +73,9 @@ class Transcriber:
         elif self.provider == "gemini":
             if not GEMINI_API_KEY:
                 raise ValueError("GEMINI_API_KEY not configured for transcription")
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            self.genai = genai
+            # Use new google-genai package
+            from google import genai
+            self.genai_client = genai.Client(api_key=GEMINI_API_KEY)
     
     async def transcribe(self, video_path: str) -> List[TranscriptSegment]:
         """
@@ -65,24 +87,24 @@ class Transcriber:
         Returns:
             List of TranscriptSegment objects
         """
-        # Extract audio from video
-        audio_path = self._extract_audio(video_path)
-        
-        try:
-            if self.provider == "openai":
+        if self.provider == "openai":
+            # Extract audio from video (requires ffmpeg)
+            audio_path = self._extract_audio(video_path)
+            
+            try:
                 segments = await self._transcribe_openai(audio_path)
-            else:
-                segments = await self._transcribe_gemini(audio_path, video_path)
-            
-            # Save transcript to file
-            self._save_transcript(video_path, segments)
-            
-            return segments
-            
-        finally:
-            # Cleanup temp audio file
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
+            finally:
+                # Cleanup temp audio file
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+        else:
+            # Gemini can process video directly
+            segments = await self._transcribe_gemini(video_path)
+        
+        # Save transcript to file
+        self._save_transcript(video_path, segments)
+        
+        return segments
     
     def _extract_audio(self, video_path: str) -> str:
         """
@@ -94,6 +116,9 @@ class Transcriber:
         Returns:
             Path to extracted audio file
         """
+        if not self.ffmpeg_available:
+            raise RuntimeError("ffmpeg not available for audio extraction")
+        
         # Create temp file for audio
         audio_path = tempfile.mktemp(suffix=".mp3")
         
@@ -158,52 +183,100 @@ class Transcriber:
         
         return segments
     
-    async def _transcribe_gemini(self, audio_path: str, video_path: str) -> List[TranscriptSegment]:
+    async def _transcribe_gemini(self, video_path: str) -> List[TranscriptSegment]:
         """
-        Transcribe using Google Gemini
-        Note: Gemini doesn't have native audio transcription like Whisper,
-        so we'll use the video with audio and request transcription with timestamps
+        Transcribe using Google Gemini (processes video directly)
         
         Args:
-            audio_path: Path to audio file (for fallback)
-            video_path: Path to original video
+            video_path: Path to video file
             
         Returns:
             List of TranscriptSegment objects
         """
-        # Upload video file to Gemini
-        video_file = self.genai.upload_file(video_path)
+        import time
+        from google.genai import types
+        from google.genai.errors import ClientError
+        
+        print("    Uploading video to Gemini...")
+        
+        # Upload video file using new API
+        with open(video_path, "rb") as f:
+            video_file = self.genai_client.files.upload(
+                file=f,
+                config={"mime_type": "video/mp4"}
+            )
         
         # Wait for processing
-        import time
-        while video_file.state.name == "PROCESSING":
-            time.sleep(2)
-            video_file = self.genai.get_file(video_file.name)
+        max_wait = 120
+        waited = 0
+        while video_file.state.name == "PROCESSING" and waited < max_wait:
+            print(f"    Processing... ({waited}s)")
+            time.sleep(5)
+            waited += 5
+            video_file = self.genai_client.files.get(name=video_file.name)
         
         if video_file.state.name == "FAILED":
             raise Exception("Gemini video processing failed")
         
-        # Create model and generate transcription
-        model = self.genai.GenerativeModel(GEMINI_VISION_MODEL)
+        print("    Generating transcript...")
         
-        prompt = """Transcribe all speech in this video. 
-        Return the transcription as a JSON array with the following format:
-        [
-            {"start": 0.0, "end": 3.5, "text": "First sentence here"},
-            {"start": 3.5, "end": 7.2, "text": "Second sentence here"}
-        ]
+        prompt = """Transcribe ALL speech in this video with accurate timestamps.
+
+Return the transcription as a JSON array with this EXACT format:
+[
+    {"start": 0.0, "end": 3.5, "text": "First sentence or phrase here"},
+    {"start": 3.5, "end": 7.2, "text": "Second sentence or phrase here"}
+]
+
+IMPORTANT RULES:
+1. Include timestamps in SECONDS for each segment
+2. Be accurate with the spoken words (the video is in Hinglish - mix of Hindi and English)
+3. Split into natural sentence/phrase boundaries (roughly 3-8 seconds each)
+4. Transcribe EXACTLY what is spoken, preserving the Hinglish
+5. Return ONLY the JSON array, no other text or markdown
+6. Make sure timestamps cover the entire video duration
+7. Do not overlap timestamps between segments
+
+Start transcribing now:"""
         
-        Important:
-        - Include timestamps in seconds for each sentence/segment
-        - Be accurate with the spoken words
-        - Split into natural sentence boundaries
-        - Return ONLY the JSON array, no other text
-        """
+        # Generate using new API with retry for rate limiting
+        max_retries = 5
+        retry_delay = 15  # Start with 15 seconds
+        response = None
         
-        response = model.generate_content([video_file, prompt])
+        for attempt in range(max_retries):
+            try:
+                response = self.genai_client.models.generate_content(
+                    model=GEMINI_VISION_MODEL,
+                    contents=[
+                        types.Content(
+                            parts=[
+                                types.Part.from_uri(file_uri=video_file.uri, mime_type="video/mp4"),
+                                types.Part.from_text(text=prompt)
+                            ]
+                        )
+                    ]
+                )
+                break  # Success, exit retry loop
+            except ClientError as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    if attempt < max_retries - 1:
+                        print(f"    Rate limited. Waiting {retry_delay}s before retry {attempt + 2}/{max_retries}...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        raise Exception(f"Rate limit exceeded after {max_retries} retries. Please wait a few minutes and try again.")
+                else:
+                    raise
         
-        # Clean up uploaded file
-        self.genai.delete_file(video_file.name)
+        # Cleanup uploaded file
+        try:
+            self.genai_client.files.delete(name=video_file.name)
+        except:
+            pass
+        
+        if response is None:
+            raise Exception("Failed to get response from Gemini")
         
         # Parse response
         try:
@@ -211,11 +284,16 @@ class Transcriber:
             text = response.text.strip()
             
             # Remove markdown code blocks if present
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-                text = text.strip()
+            if "```" in text:
+                # Find JSON content between code blocks
+                parts = text.split("```")
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("json"):
+                        part = part[4:].strip()
+                    if part.startswith("["):
+                        text = part
+                        break
             
             segments_data = json.loads(text)
             
@@ -230,20 +308,25 @@ class Transcriber:
             
             return segments
             
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"    Warning: Could not parse JSON response, creating single segment")
+            print(f"    Response was: {response.text[:200]}...")
+            
             # Fallback: return single segment with full response
-            # Try to estimate duration from video
             duration = self._get_video_duration(video_path)
             
             return [TranscriptSegment(
                 id=1,
                 start=0.0,
-                end=duration,
+                end=duration if duration > 0 else 60.0,
                 text=response.text.strip()
             )]
     
     def _get_video_duration(self, video_path: str) -> float:
         """Get video duration using ffprobe"""
+        if not self.ffmpeg_available:
+            return 0.0
+        
         try:
             cmd = [
                 "ffprobe",
@@ -256,16 +339,20 @@ class Transcriber:
             data = json.loads(result.stdout)
             return float(data["format"]["duration"])
         except:
-            return 60.0  # Default fallback
+            return 0.0
     
     def _save_transcript(self, video_path: str, segments: List[TranscriptSegment]):
         """Save transcript to JSON file"""
         video_name = Path(video_path).stem
         output_path = self.output_dir / f"{video_name}_transcript.json"
         
+        # Calculate total duration from segments
+        total_duration = max((seg.end for seg in segments), default=0)
+        
         data = {
             "video_file": Path(video_path).name,
             "segment_count": len(segments),
+            "total_duration": total_duration,
             "segments": [seg.model_dump() for seg in segments]
         }
         

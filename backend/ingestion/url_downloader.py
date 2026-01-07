@@ -5,16 +5,25 @@ Downloads videos from URLs for processing
 
 import os
 import asyncio
-import aiohttp
 import httpx
 from pathlib import Path
 from typing import Optional
 import json
+import subprocess
 
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config import AROLL_DIR, BROLL_DIR, BASE_DIR
+
+
+def is_ffprobe_available() -> bool:
+    """Check if ffprobe is available"""
+    try:
+        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 class VideoDownloader:
@@ -25,6 +34,7 @@ class VideoDownloader:
         self.broll_dir = BROLL_DIR
         self.aroll_dir.mkdir(parents=True, exist_ok=True)
         self.broll_dir.mkdir(parents=True, exist_ok=True)
+        self.ffprobe_available = is_ffprobe_available()
     
     async def download_from_json(self, json_path: Optional[str] = None) -> dict:
         """
@@ -121,8 +131,9 @@ class VideoDownloader:
         return str(save_path)
     
     def get_video_duration(self, filepath: str) -> float:
-        """Get video duration using ffprobe"""
-        import subprocess
+        """Get video duration using ffprobe (returns 0 if not available)"""
+        if not self.ffprobe_available:
+            return 0.0
         
         try:
             cmd = [
@@ -140,8 +151,6 @@ class VideoDownloader:
     
     def clear_downloads(self):
         """Clear all downloaded videos"""
-        import shutil
-        
         for file in self.aroll_dir.iterdir():
             if file.is_file():
                 os.remove(file)

@@ -48,9 +48,9 @@ class EmbeddingGenerator:
             self.model = OPENAI_EMBEDDING_MODEL
             self.embedding_dim = 1536  # text-embedding-3-small dimension
         elif self.provider == "gemini":
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            self.genai = genai
+            # Use new google-genai package
+            from google import genai
+            self.genai_client = genai.Client(api_key=GEMINI_API_KEY)
             self.model = GEMINI_EMBEDDING_MODEL
             self.embedding_dim = 768  # Gemini embedding dimension
     
@@ -137,15 +137,33 @@ class EmbeddingGenerator:
     
     async def _embed_gemini(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using Google Gemini"""
+        import time
+        from google.genai.errors import ClientError
+        
         embeddings = []
         
         for text in texts:
-            result = self.genai.embed_content(
-                model=self.model,
-                content=text,
-                task_type="semantic_similarity"
-            )
-            embeddings.append(result['embedding'])
+            max_retries = 5
+            retry_delay = 15
+            
+            for attempt in range(max_retries):
+                try:
+                    result = self.genai_client.models.embed_content(
+                        model=self.model,
+                        contents=text
+                    )
+                    embeddings.append(result.embeddings[0].values)
+                    break
+                except ClientError as e:
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        if attempt < max_retries - 1:
+                            print(f"    Rate limited. Waiting {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                        else:
+                            raise
+                    else:
+                        raise
         
         return embeddings
     
