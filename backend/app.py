@@ -736,6 +736,333 @@ async def caption_with_metadata(captioner: BRollCaptioner, broll_files: list) ->
 
 
 # ============================================================================
+# Frontend API Endpoints
+# ============================================================================
+
+import uuid
+import os
+from pydantic import BaseModel
+from typing import Dict, Any
+
+# Store for background jobs
+processing_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+class ConfigureRequest(BaseModel):
+    provider: str
+    api_key: Optional[str] = None
+
+
+class ProcessRequest(BaseModel):
+    settings: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/upload")
+async def upload_videos(
+    aroll: UploadFile = File(None),
+    brolls: List[UploadFile] = File(default=[]),
+    broll_metadata: Optional[str] = None
+):
+    """
+    Upload A-roll and B-roll videos together
+    Used by frontend for combined upload
+    """
+    import json
+    
+    print(f"Upload request received:")
+    print(f"  A-roll: {aroll.filename if aroll else 'None'}")
+    print(f"  B-rolls: {len(brolls)} files")
+    print(f"  Metadata: {broll_metadata}")
+    
+    result = {
+        "success": True,
+        "aroll": None,
+        "brolls": []
+    }
+    
+    # Handle A-roll upload
+    if aroll and aroll.filename:
+        aroll_ingestor = ArollIngestor()
+        try:
+            filepath, duration = await aroll_ingestor.ingest(aroll)
+            state.aroll_path = filepath
+            state.aroll_duration = duration
+            state.aroll_filename = aroll.filename
+            
+            result["aroll"] = {
+                "filename": aroll.filename,
+                "duration": duration,
+                "path": filepath
+            }
+            print(f"  A-roll uploaded: {aroll.filename}")
+        except Exception as e:
+            print(f"  A-roll upload failed: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"A-roll upload failed: {str(e)}")
+    
+    # Handle B-roll uploads
+    if brolls:
+        broll_ingestor = BrollIngestor()
+        
+        # Parse metadata if provided
+        metadata_list = []
+        if broll_metadata:
+            try:
+                metadata_list = json.loads(broll_metadata)
+            except:
+                metadata_list = []
+        
+        for idx, broll_file in enumerate(brolls):
+            try:
+                broll_id = f"broll_{idx + 1}"
+                filepath, duration = await broll_ingestor.ingest(broll_file, broll_id=broll_id)
+                
+                # Get metadata for this broll
+                meta = ""
+                if idx < len(metadata_list):
+                    meta = metadata_list[idx].get("metadata", "")
+                
+                result["brolls"].append({
+                    "id": broll_id,
+                    "filename": broll_file.filename,
+                    "duration": duration,
+                    "path": filepath,
+                    "metadata": meta
+                })
+            except Exception as e:
+                print(f"Warning: B-roll {broll_file.filename} upload failed: {e}")
+    
+    return result
+
+
+@app.post("/api/configure")
+async def configure_api(request: ConfigureRequest):
+    """
+    Configure API provider and key
+    Updates .env file with new settings
+    """
+    import os
+    from dotenv import set_key
+    
+    env_path = Path(__file__).parent / ".env"
+    
+    # Update environment variables
+    os.environ["API_PROVIDER"] = request.provider
+    os.environ["TRANSCRIPTION_PROVIDER"] = request.provider
+    
+    if request.api_key:
+        if request.provider == "openrouter":
+            os.environ["OPENROUTER_API_KEY"] = request.api_key
+        elif request.provider == "gemini":
+            os.environ["GEMINI_API_KEY"] = request.api_key
+        elif request.provider == "openai":
+            os.environ["OPENAI_API_KEY"] = request.api_key
+    
+    # Reload config
+    from importlib import reload
+    import config
+    reload(config)
+    
+    return {
+        "success": True,
+        "provider": request.provider,
+        "mode": "offline" if request.provider == "offline" else "online"
+    }
+
+
+@app.post("/api/process")
+async def start_processing(request: ProcessRequest, background_tasks: BackgroundTasks):
+    """
+    Start the processing pipeline in background
+    Returns job_id for status polling
+    """
+    job_id = str(uuid.uuid4())
+    
+    # Initialize job status
+    processing_jobs[job_id] = {
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Starting...",
+        "error": None
+    }
+    
+    # Start background processing
+    background_tasks.add_task(
+        run_pipeline_background,
+        job_id,
+        request.settings or {}
+    )
+    
+    return {"job_id": job_id, "status": "processing"}
+
+
+async def run_pipeline_background(job_id: str, settings: dict):
+    """Run the pipeline in background"""
+    import asyncio
+    
+    try:
+        # Step 1: Transcription
+        processing_jobs[job_id]["current_step"] = "Transcribing A-roll..."
+        processing_jobs[job_id]["progress"] = 20
+        
+        transcriber = Transcriber()
+        
+        # Try to load cached transcript
+        transcript_segments = transcriber.load_transcript(state.aroll_path)
+        if not transcript_segments:
+            transcript_segments = await transcriber.transcribe(state.aroll_path)
+        
+        state.transcript_segments = transcript_segments
+        
+        # Update duration if needed
+        if state.aroll_duration == 0 and transcript_segments:
+            state.aroll_duration = max(seg.end for seg in transcript_segments)
+        
+        # Step 2: Caption B-rolls
+        processing_jobs[job_id]["current_step"] = "Captioning B-rolls..."
+        processing_jobs[job_id]["progress"] = 40
+        
+        # Get B-roll files
+        broll_files = []
+        broll_dir = Path(BROLL_DIR)
+        for video_file in broll_dir.glob("*.mp4"):
+            broll_files.append({
+                "broll_id": video_file.stem,
+                "filename": video_file.name,
+                "filepath": str(video_file),
+                "duration": 5.0,  # Default
+                "metadata": ""
+            })
+        
+        captioner = BRollCaptioner(provider="offline")
+        broll_descriptions = []
+        
+        for broll in broll_files:
+            desc = await captioner.caption_single(
+                filepath=broll["filepath"],
+                broll_id=broll["broll_id"],
+                filename=broll["filename"],
+                duration=broll["duration"]
+            )
+            broll_descriptions.append(desc)
+        
+        state.broll_descriptions = broll_descriptions
+        
+        # Step 3: Embeddings
+        processing_jobs[job_id]["current_step"] = "Generating embeddings..."
+        processing_jobs[job_id]["progress"] = 60
+        
+        embedder = EmbeddingGenerator()
+        transcript_embeddings = await embedder.embed_transcript_segments(transcript_segments)
+        broll_embeddings = await embedder.embed_broll_descriptions(broll_descriptions)
+        
+        state.transcript_embeddings = transcript_embeddings
+        state.broll_embeddings = broll_embeddings
+        
+        # Step 4: Matching
+        processing_jobs[job_id]["current_step"] = "Finding semantic matches..."
+        processing_jobs[job_id]["progress"] = 80
+        
+        similarity_matrix = embedder.compute_similarity_matrix(
+            transcript_embeddings,
+            broll_embeddings
+        )
+        state.similarity_matrix = similarity_matrix
+        
+        matcher = SemanticMatcher()
+        matcher.similarity_threshold = settings.get("similarity_threshold", 0.35)
+        matcher.min_gap_seconds = settings.get("min_gap_seconds", 5.0)
+        matcher.max_insertions = settings.get("max_insertions", 6)
+        
+        selected_matches = matcher.find_best_matches(
+            transcript_segments,
+            broll_descriptions,
+            similarity_matrix
+        )
+        state.selected_matches = selected_matches
+        
+        # Step 5: Generate Timeline
+        processing_jobs[job_id]["current_step"] = "Generating timeline..."
+        processing_jobs[job_id]["progress"] = 90
+        
+        # Build broll lookup
+        broll_lookup = {desc.broll_id: desc for desc in broll_descriptions}
+        
+        planner = TimelinePlanner()
+        timeline = planner.create_timeline(
+            aroll_filename=state.aroll_filename or "a_roll.mp4",
+            aroll_duration=state.aroll_duration,
+            matches=selected_matches,
+            transcript_segments=transcript_segments,
+            broll_descriptions=broll_descriptions
+        )
+        
+        state.timeline = timeline
+        
+        # Save timeline
+        planner.save_timeline(timeline)
+        
+        # Done
+        processing_jobs[job_id]["status"] = "completed"
+        processing_jobs[job_id]["progress"] = 100
+        processing_jobs[job_id]["current_step"] = "Complete!"
+        
+    except Exception as e:
+        processing_jobs[job_id]["status"] = "failed"
+        processing_jobs[job_id]["error"] = str(e)
+        processing_jobs[job_id]["current_step"] = f"Failed: {str(e)}"
+        print(f"Pipeline error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+@app.get("/api/status/{job_id}")
+async def get_job_status(job_id: str):
+    """Get status of a processing job"""
+    if job_id not in processing_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return processing_jobs[job_id]
+
+
+@app.get("/api/timeline")
+async def get_timeline_output():
+    """Get the generated timeline"""
+    if not state.timeline:
+        # Try to load from file
+        timeline_path = OUTPUT_DIR / "timeline_latest.json"
+        if timeline_path.exists():
+            import json
+            with open(timeline_path) as f:
+                return json.load(f)
+        raise HTTPException(status_code=404, detail="No timeline generated yet")
+    
+    return state.timeline.dict() if hasattr(state.timeline, 'dict') else state.timeline
+
+
+@app.get("/api/offline-status")
+async def check_offline_models():
+    """Check if offline models are downloaded"""
+    from understanding.offline_models import check_models_available
+    
+    models_status = check_models_available()
+    
+    return {
+        "models_available": all(models_status.values()),
+        "details": models_status
+    }
+
+
+@app.post("/api/download-models")
+async def download_offline_models(background_tasks: BackgroundTasks):
+    """Trigger download of offline models"""
+    from understanding.offline_models import download_models
+    
+    background_tasks.add_task(download_models)
+    
+    return {"success": True, "message": "Model download started"}
+
+
+# ============================================================================
 # Reset Endpoint
 # ============================================================================
 
@@ -763,4 +1090,4 @@ async def reset_state():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

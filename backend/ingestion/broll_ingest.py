@@ -115,7 +115,8 @@ class BrollIngestor:
             raise
     
     def _get_video_duration(self, filepath: str) -> float:
-        """Get video duration using ffprobe"""
+        """Get video duration using ffprobe, with Python fallback"""
+        # Try ffprobe first
         try:
             cmd = [
                 "ffprobe",
@@ -129,9 +130,43 @@ class BrollIngestor:
             data = json.loads(result.stdout)
             return float(data["format"]["duration"])
             
-        except Exception as e:
-            # Return default duration if ffprobe fails
-            return 5.0
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            pass
+        except (KeyError, json.JSONDecodeError):
+            pass
+        
+        # Fallback: Try OpenCV
+        try:
+            import cv2
+            cap = cv2.VideoCapture(filepath)
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                cap.release()
+                if fps > 0 and frame_count > 0:
+                    return frame_count / fps
+        except ImportError:
+            pass
+        except Exception:
+            pass
+        
+        # Fallback: Try moviepy
+        try:
+            from moviepy.editor import VideoFileClip
+            clip = VideoFileClip(filepath)
+            duration = clip.duration
+            clip.close()
+            del clip
+            import gc
+            gc.collect()
+            return duration
+        except ImportError:
+            pass
+        except Exception:
+            pass
+        
+        # Default fallback
+        return 5.0
     
     def get_all_brolls(self) -> List[dict]:
         """Get information about all uploaded B-roll files"""

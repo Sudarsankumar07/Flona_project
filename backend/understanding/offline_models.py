@@ -349,6 +349,63 @@ def get_video_duration(video_path: str) -> float:
 
 
 # =============================================================================
+# MODEL MANAGEMENT FUNCTIONS
+# =============================================================================
+
+def check_models_available() -> dict:
+    """Check which offline models are available/downloaded"""
+    from huggingface_hub import HfApi, try_to_load_from_cache
+    
+    status = {
+        "vision_model": False,
+        "embedding_model": False,
+        "whisper_model": False
+    }
+    
+    try:
+        # Check vision model (BLIP)
+        cached = try_to_load_from_cache("Salesforce/blip-image-captioning-base", "config.json")
+        status["vision_model"] = cached is not None
+    except:
+        pass
+    
+    try:
+        # Check embedding model
+        cached = try_to_load_from_cache("sentence-transformers/all-MiniLM-L6-v2", "config.json")
+        status["embedding_model"] = cached is not None
+    except:
+        pass
+    
+    return status
+
+
+def download_models():
+    """Download all offline models"""
+    print("Downloading offline models...")
+    
+    # Download vision model
+    print("  Downloading BLIP vision model...")
+    try:
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+        print("  ✓ BLIP model downloaded")
+    except Exception as e:
+        print(f"  ✗ BLIP download failed: {e}")
+    
+    # Download embedding model
+    print("  Downloading embedding model...")
+    try:
+        from sentence_transformers import SentenceTransformer
+        SentenceTransformer("all-MiniLM-L6-v2")
+        print("  ✓ Embedding model downloaded")
+    except Exception as e:
+        print(f"  ✗ Embedding download failed: {e}")
+    
+    print("Model download complete!")
+
+
+# =============================================================================
 # TEST FUNCTION
 # =============================================================================
 
