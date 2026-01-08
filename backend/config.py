@@ -31,7 +31,7 @@ for dir_path in [AROLL_DIR, BROLL_DIR, TRANSCRIPTS_DIR, CAPTIONS_DIR, OUTPUT_DIR
 # API CONFIGURATION
 # =============================================================================
 
-# API Provider Selection: "openai", "gemini", or "offline"
+# API Provider Selection: "openai", "gemini", "openrouter", or "offline"
 API_PROVIDER = os.getenv("API_PROVIDER", "gemini").lower()
 
 # OpenAI Configuration
@@ -44,6 +44,10 @@ OPENAI_WHISPER_MODEL = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")  # For AI planning
 GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedding-004")
+
+# OpenRouter Configuration (access to many models via one API)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
 
 # Offline Model Configuration
 OFFLINE_VISION_MODEL = os.getenv("OFFLINE_VISION_MODEL", "blip")  # "blip", "git", "moondream"

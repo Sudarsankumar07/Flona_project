@@ -1,10 +1,11 @@
 """
 AI-Powered Insertion Planner
-Uses Gemini/OpenAI to intelligently decide B-roll insertions based on semantic understanding
+Uses Gemini/OpenAI/OpenRouter to intelligently decide B-roll insertions based on semantic understanding
 This replaces pure embedding similarity with AI reasoning
 """
 
 import json
+import os
 from typing import List, Dict, Optional
 from pathlib import Path
 import sys
@@ -14,10 +15,13 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config import get_vision_provider, GEMINI_API_KEY, OPENAI_API_KEY
 from schemas import TranscriptSegment, BRollDescription, BRollInsertion
 
+# OpenRouter API key (can also be in .env)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
 
 class AIInsertionPlanner:
     """
-    Uses AI (Gemini/OpenAI) to analyze transcript and B-roll descriptions
+    Uses AI (Gemini/OpenAI/OpenRouter) to analyze transcript and B-roll descriptions
     and suggest optimal insertion points with reasoning
     """
     
@@ -26,7 +30,7 @@ class AIInsertionPlanner:
         Initialize AI planner with specified provider
         
         Args:
-            provider: "gemini" or "openai". If None, auto-detect from config
+            provider: "gemini", "openai", or "openrouter". If None, auto-detect from config
         """
         self.provider = provider or get_vision_provider()
         
@@ -34,8 +38,10 @@ class AIInsertionPlanner:
             self._init_gemini()
         elif self.provider == "openai":
             self._init_openai()
+        elif self.provider == "openrouter":
+            self._init_openrouter()
         else:
-            raise ValueError(f"AI provider must be 'gemini' or 'openai', got: {self.provider}")
+            raise ValueError(f"AI provider must be 'gemini', 'openai', or 'openrouter', got: {self.provider}")
     
     def _init_gemini(self):
         """Initialize Gemini client"""
@@ -87,6 +93,24 @@ class AIInsertionPlanner:
         except ImportError:
             raise ImportError("openai not installed. Run: pip install openai")
     
+    def _init_openrouter(self):
+        """Initialize OpenRouter client (uses OpenAI SDK)"""
+        if not OPENROUTER_API_KEY:
+            raise ValueError("OPENROUTER_API_KEY not found in .env file")
+        
+        try:
+            from openai import OpenAI
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=OPENROUTER_API_KEY
+            )
+            # Use a fast, capable model via OpenRouter
+            # Good options: meta-llama/llama-3.1-70b-instruct, anthropic/claude-3-haiku, google/gemma-2-27b-it
+            self.model_name = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
+            print(f"✓ Using OpenRouter model: {self.model_name}")
+        except ImportError:
+            raise ImportError("openai not installed. Run: pip install openai")
+    
     def plan_insertions(
         self,
         segments: List[TranscriptSegment],
@@ -116,6 +140,8 @@ class AIInsertionPlanner:
         # Get AI response
         if self.provider == "gemini":
             response_text = self._query_gemini(prompt)
+        elif self.provider == "openrouter":
+            response_text = self._query_openrouter(prompt)
         else:
             response_text = self._query_openai(prompt)
         
@@ -210,6 +236,27 @@ Analyze carefully and respond with ONLY the JSON object."""
             return response.choices[0].message.content
         except Exception as e:
             print(f"❌ OpenAI API error: {e}")
+            raise
+    
+    def _query_openrouter(self, prompt: str) -> str:
+        """Query OpenRouter API (uses OpenAI SDK format)"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert video editor who suggests B-roll insertions. Respond with JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=2048,
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/Sudarsankumar07/Flona_project",
+                    "X-Title": "Smart B-Roll Inserter"
+                }
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"❌ OpenRouter API error: {e}")
             raise
     
     def _parse_ai_response(
