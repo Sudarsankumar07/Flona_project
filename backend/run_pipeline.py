@@ -154,8 +154,8 @@ async def main():
     # Step 4: AI-Powered Insertion Planning (skip embeddings for AI mode)
     # =========================================================================
     
-    # Check if using AI mode (gemini/openai) instead of offline embeddings
-    use_ai_planning = API_PROVIDER in ["gemini", "openai"]
+    # Check if using AI mode (gemini/openai/openrouter) instead of offline embeddings
+    use_ai_planning = API_PROVIDER in ["gemini", "openai", "openrouter"]
     
     if use_ai_planning:
         print("\n" + "-" * 60)

@@ -41,6 +41,11 @@ class EmbeddingGenerator:
         self.embeddings_dir = ARTIFACTS_DIR / "embeddings"
         self.embeddings_dir.mkdir(parents=True, exist_ok=True)
         
+        # OpenRouter doesn't have embedding endpoints, use offline instead
+        if self.provider == "openrouter":
+            print("  OpenRouter doesn't support embeddings, using offline model")
+            self.provider = "offline"
+        
         # Initialize appropriate client
         if self.provider == "offline":
             print("  Using offline embedding model")

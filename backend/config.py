@@ -47,7 +47,9 @@ GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedd
 
 # OpenRouter Configuration (access to many models via one API)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # Fast, cheap, great for planning
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o")  # Default model for planning
+OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o")  # For vision tasks
 
 # Offline Model Configuration
 OFFLINE_VISION_MODEL = os.getenv("OFFLINE_VISION_MODEL", "blip")  # "blip", "git", "moondream"
@@ -92,10 +94,14 @@ def get_vision_provider():
     """Get the active vision API provider"""
     if API_PROVIDER == "offline":
         return "offline"
+    elif API_PROVIDER == "openrouter" and OPENROUTER_API_KEY:
+        return "openrouter"
     elif API_PROVIDER == "openai" and OPENAI_API_KEY:
         return "openai"
     elif API_PROVIDER == "gemini" and GEMINI_API_KEY:
         return "gemini"
+    elif OPENROUTER_API_KEY:
+        return "openrouter"
     elif GEMINI_API_KEY:
         return "gemini"
     elif OPENAI_API_KEY:
@@ -118,11 +124,14 @@ def validate_config():
     if API_PROVIDER == "offline":
         return True
     
-    if not OPENAI_API_KEY and not GEMINI_API_KEY:
-        errors.append("No API key configured. Set OPENAI_API_KEY or GEMINI_API_KEY in .env file, or use API_PROVIDER=offline")
+    if not OPENAI_API_KEY and not GEMINI_API_KEY and not OPENROUTER_API_KEY:
+        errors.append("No API key configured. Set OPENAI_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY in .env file, or use API_PROVIDER=offline")
     
     if TRANSCRIPTION_PROVIDER == "openai" and not OPENAI_API_KEY:
         errors.append("TRANSCRIPTION_PROVIDER is 'openai' but OPENAI_API_KEY is not set")
+    
+    if TRANSCRIPTION_PROVIDER == "openrouter" and not OPENROUTER_API_KEY:
+        errors.append("TRANSCRIPTION_PROVIDER is 'openrouter' but OPENROUTER_API_KEY is not set")
     
     if errors:
         raise ValueError("\n".join(errors))

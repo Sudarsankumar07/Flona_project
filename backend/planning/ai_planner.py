@@ -168,7 +168,7 @@ class AIInsertionPlanner:
         
         # Format B-rolls
         broll_text = "\n".join([
-            f"{broll.id}: {broll.description} (Duration: {broll.duration:.1f}s)"
+            f"{broll.broll_id}: {broll.description} (Duration: {broll.duration:.1f}s)"
             for broll in broll_descriptions
         ])
         

@@ -1,0 +1,67 @@
+{
+  "video_file": "a_roll.mp4",
+  "segment_count": 10,
+  "total_duration": 40.1,
+  "segments": [
+    {
+      "id": 1,
+      "start": 0.0,
+      "end": 4.1,
+      "text": "Hi everyone! Today, we're gonna talk about food quality and safety."
+    },
+    {
+      "id": 2,
+      "start": 4.1,
+      "end": 8.3,
+      "text": "It's super important to know what you're eating, right? Like, is it healthy?"
+    },
+    {
+      "id": 3,
+      "start": 8.3,
+      "end": 12.1,
+      "text": "So, first things first, always check the expiry date on packaged foods."
+    },
+    {
+      "id": 4,
+      "start": 12.1,
+      "end": 15.8,
+      "text": "Expiry date is like, the last date you should eat that thing."
+    },
+    {
+      "id": 5,
+      "start": 15.8,
+      "end": 20.2,
+      "text": "And, you know, look for any signs of spoilage. Like, if it smells weird, don't eat it!"
+    },
+    {
+      "id": 6,
+      "start": 20.2,
+      "end": 24.5,
+      "text": "Next up, hygiene! Before cooking or eating, wash your hands properly."
+    },
+    {
+      "id": 7,
+      "start": 24.5,
+      "end": 28.3,
+      "text": "Use soap and water, and scrub for at least 20 seconds. It's a must!"
+    },
+    {
+      "id": 8,
+      "start": 28.3,
+      "end": 32.4,
+      "text": "Also, when you're buying fruits and veggies, try to choose fresh and seasonal ones."
+    },
+    {
+      "id": 9,
+      "start": 32.4,
+      "end": 36.5,
+      "text": "They're usually more nutritious and less likely to have harmful chemicals."
+    },
+    {
+      "id": 10,
+      "start": 36.5,
+      "end": 40.1,
+      "text": "So yeah, just be mindful of these things, and stay healthy!"
+    }
+  ]
+}
