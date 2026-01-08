@@ -16,7 +16,7 @@ from config import get_vision_provider, GEMINI_API_KEY, OPENAI_API_KEY
 from schemas import TranscriptSegment, BRollDescription, BRollInsertion
 
 # OpenRouter API key (can also be in .env)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 
 class AIInsertionPlanner:
