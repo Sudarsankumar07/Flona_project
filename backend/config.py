@@ -47,7 +47,7 @@ GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/text-embedd
 
 # OpenRouter Configuration (access to many models via one API)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # Fast, cheap, great for planning
 
 # Offline Model Configuration
 OFFLINE_VISION_MODEL = os.getenv("OFFLINE_VISION_MODEL", "blip")  # "blip", "git", "moondream"

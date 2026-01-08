@@ -105,8 +105,8 @@ class AIInsertionPlanner:
                 api_key=OPENROUTER_API_KEY
             )
             # Use a fast, capable model via OpenRouter
-            # Good options: meta-llama/llama-3.1-70b-instruct, anthropic/claude-3-haiku, google/gemma-2-27b-it
-            self.model_name = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
+            # Good options: openai/gpt-4o-mini, meta-llama/llama-3.1-70b-instruct, anthropic/claude-3-haiku
+            self.model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
             print(f"✓ Using OpenRouter model: {self.model_name}")
         except ImportError:
             raise ImportError("openai not installed. Run: pip install openai")
