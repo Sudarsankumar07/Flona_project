@@ -7,7 +7,7 @@ const api = axios.create({
   timeout: 300000, // 5 minutes for video processing
 });
 
-// Upload videos
+// Upload videos (file mode)
 export const uploadVideos = async (arollFile, brollFiles, brollMetadata = []) => {
   const formData = new FormData();
   
@@ -32,6 +32,15 @@ export const uploadVideos = async (arollFile, brollFiles, brollMetadata = []) =>
   return response.data;
 };
 
+// Upload videos from URLs (url mode)
+export const uploadFromUrls = async (urlData) => {
+  const response = await api.post('/upload-urls', {
+    a_roll: urlData.aroll,
+    b_rolls: urlData.brolls
+  });
+  return response.data;
+};
+
 // Configure API settings
 export const configureApi = async (provider, apiKey = null) => {
   const response = await api.post('/configure', {
@@ -43,7 +52,10 @@ export const configureApi = async (provider, apiKey = null) => {
 
 // Start processing
 export const startProcessing = async (settings = {}) => {
+  console.log('Calling /process with settings:', settings);
   const response = await api.post('/process', { settings });
+  console.log('Response from /process:', response);
+  console.log('Response data:', response.data);
   return response.data;
 };
 

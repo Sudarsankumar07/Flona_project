@@ -30,8 +30,9 @@ from schemas import (
 from ingestion import ArollIngestor, BrollIngestor, VideoDownloader
 from transcription import Transcriber
 from understanding import BRollCaptioner, EmbeddingGenerator
-from matching import SemanticMatcher
+from matching import SemanticMatcher, KeywordMatcher
 from planning import TimelinePlanner
+from planning.ai_planner import AIInsertionPlanner
 from rendering import VideoRenderer
 
 
@@ -361,24 +362,33 @@ async def process_full_pipeline():
         state.broll_embeddings
     )
     
-    # Step 6: Find best matches
-    matcher = SemanticMatcher()
-    state.selected_matches = matcher.find_best_matches(
-        state.transcript_segments,
-        state.broll_descriptions,
-        state.similarity_matrix
+    # Step 6: Find best matches using KeywordMatcher
+    print("📝 Using Keyword Matcher for B-roll insertions...")
+    keyword_matcher = KeywordMatcher()
+    state.selected_matches = keyword_matcher.find_matches(
+        segments=state.transcript_segments,
+        broll_descriptions=state.broll_descriptions,
+        max_insertions=6,
+        min_gap_seconds=3.0
     )
+    print(f"✓ Keyword Matcher returned {len(state.selected_matches)} insertions")
+    
+    # Log each insertion for debugging
+    for ins in state.selected_matches:
+        print(f"  - {ins.start_sec}s: {ins.broll_id} ({ins.confidence:.2f})")
     
     # Step 7: Generate timeline
     planner = TimelinePlanner()
-    state.timeline = planner.generate_timeline(
+    state.timeline = planner.create_timeline(
         aroll_filename=state.aroll_filename,
         aroll_duration=state.aroll_duration,
-        segments=state.transcript_segments,
-        broll_descriptions=state.broll_descriptions,
-        selected_matches=state.selected_matches,
-        processing_start_time=state.processing_start_time
+        matches=state.selected_matches,
+        transcript_segments=state.transcript_segments,
+        broll_descriptions=state.broll_descriptions
     )
+    
+    # Save the timeline
+    planner.save_timeline(state.timeline)
     
     # Validate timeline
     validation = planner.validate_timeline(state.timeline)
@@ -654,25 +664,34 @@ async def process_from_urls(json_path: Optional[str] = None):
         state.broll_embeddings
     )
     
-    matcher = SemanticMatcher()
-    state.selected_matches = matcher.find_best_matches(
-        state.transcript_segments,
-        state.broll_descriptions,
-        state.similarity_matrix
+    # Use KeywordMatcher for better results
+    print("📝 Using Keyword Matcher for B-roll insertions...")
+    keyword_matcher = KeywordMatcher()
+    state.selected_matches = keyword_matcher.find_matches(
+        segments=state.transcript_segments,
+        broll_descriptions=state.broll_descriptions,
+        max_insertions=6,
+        min_gap_seconds=3.0
     )
     print(f"  Selected matches: {len(state.selected_matches)}")
+    
+    # Log each insertion for debugging
+    for ins in state.selected_matches:
+        print(f"    - {ins.start_sec}s: {ins.broll_id} ({ins.confidence:.2f})")
     
     # Step 6: Generate timeline
     print("\n[6/6] Generating timeline plan...")
     planner = TimelinePlanner()
-    state.timeline = planner.generate_timeline(
+    state.timeline = planner.create_timeline(
         aroll_filename=state.aroll_filename,
         aroll_duration=state.aroll_duration,
-        segments=state.transcript_segments,
-        broll_descriptions=state.broll_descriptions,
-        selected_matches=state.selected_matches,
-        processing_start_time=state.processing_start_time
+        matches=state.selected_matches,
+        transcript_segments=state.transcript_segments,
+        broll_descriptions=state.broll_descriptions
     )
+    
+    # Save timeline
+    planner.save_timeline(state.timeline)
     
     # Validate
     validation = planner.validate_timeline(state.timeline)
@@ -755,6 +774,102 @@ class ConfigureRequest(BaseModel):
 
 class ProcessRequest(BaseModel):
     settings: Optional[Dict[str, Any]] = None
+
+
+class UrlUploadRequest(BaseModel):
+    a_roll: Dict[str, str]  # { url, metadata }
+    b_rolls: List[Dict[str, str]]  # [{ id, url, metadata }]
+
+
+@app.post("/api/upload-urls")
+async def upload_from_urls(request: UrlUploadRequest):
+    """
+    Download and process videos from URLs
+    Similar to video_url.json functionality
+    """
+    from ingestion.url_downloader import VideoDownloader
+    
+    print(f"URL Upload request received:")
+    print(f"  A-roll URL: {request.a_roll.get('url', 'None')[:50]}...")
+    print(f"  B-rolls: {len(request.b_rolls)} URLs")
+    
+    result = {
+        "success": True,
+        "aroll": None,
+        "brolls": []
+    }
+    
+    downloader = VideoDownloader()
+    
+    try:
+        # Download A-roll
+        if request.a_roll.get('url'):
+            aroll_path = await downloader.download_video(
+                url=request.a_roll['url'],
+                save_dir=downloader.aroll_dir,
+                filename="a_roll.mp4"
+            )
+            
+            # Get duration
+            duration = downloader.get_video_duration(aroll_path)
+            if duration == 0:
+                # Fallback using cv2
+                try:
+                    import cv2
+                    cap = cv2.VideoCapture(aroll_path)
+                    if cap.isOpened():
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                        duration = frame_count / fps if fps > 0 else 60.0
+                        cap.release()
+                except:
+                    duration = 60.0
+            
+            state.aroll_path = aroll_path
+            state.aroll_duration = duration
+            state.aroll_filename = "a_roll.mp4"
+            
+            result["aroll"] = {
+                "filename": "a_roll.mp4",
+                "duration": duration,
+                "path": aroll_path,
+                "metadata": request.a_roll.get('metadata', '')
+            }
+            print(f"  A-roll downloaded: {aroll_path}")
+        
+        # Download B-rolls
+        for idx, broll in enumerate(request.b_rolls):
+            if broll.get('url'):
+                broll_id = broll.get('id', f'broll_{idx + 1}')
+                filename = f"{broll_id}.mp4"
+                
+                try:
+                    broll_path = await downloader.download_video(
+                        url=broll['url'],
+                        save_dir=downloader.broll_dir,
+                        filename=filename
+                    )
+                    
+                    duration = downloader.get_video_duration(broll_path)
+                    if duration == 0:
+                        duration = 5.0
+                    
+                    result["brolls"].append({
+                        "id": broll_id,
+                        "filename": filename,
+                        "duration": duration,
+                        "path": broll_path,
+                        "metadata": broll.get('metadata', '')
+                    })
+                    print(f"  B-roll downloaded: {filename}")
+                except Exception as e:
+                    print(f"  Warning: B-roll {broll_id} download failed: {e}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"URL upload error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"URL download failed: {str(e)}")
 
 
 @app.post("/api/upload")
@@ -875,7 +990,12 @@ async def start_processing(request: ProcessRequest, background_tasks: Background
     Start the processing pipeline in background
     Returns job_id for status polling
     """
+    import asyncio
+    
     job_id = str(uuid.uuid4())
+    
+    print(f"Starting processing job: {job_id}")
+    print(f"Settings: {request.settings}")
     
     # Initialize job status
     processing_jobs[job_id] = {
@@ -885,14 +1005,21 @@ async def start_processing(request: ProcessRequest, background_tasks: Background
         "error": None
     }
     
-    # Start background processing
-    background_tasks.add_task(
-        run_pipeline_background,
-        job_id,
-        request.settings or {}
-    )
+    # Run the pipeline synchronously (BackgroundTasks handles threading)
+    # We need to use a sync wrapper since BackgroundTasks doesn't await async functions properly
+    def run_sync():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(run_pipeline_background(job_id, request.settings or {}))
+        finally:
+            loop.close()
     
-    return {"job_id": job_id, "status": "processing"}
+    background_tasks.add_task(run_sync)
+    
+    response = {"job_id": job_id, "status": "processing"}
+    print(f"Returning response: {response}")
+    return response
 
 
 async def run_pipeline_background(job_id: str, settings: dict):
@@ -958,26 +1085,38 @@ async def run_pipeline_background(job_id: str, settings: dict):
         state.transcript_embeddings = transcript_embeddings
         state.broll_embeddings = broll_embeddings
         
-        # Step 4: Matching
-        processing_jobs[job_id]["current_step"] = "Finding semantic matches..."
+        # Step 4: AI-Powered Matching with OpenRouter
+        processing_jobs[job_id]["current_step"] = "Planning B-roll insertions..."
         processing_jobs[job_id]["progress"] = 80
         
+        # Compute similarity matrix for reference
         similarity_matrix = embedder.compute_similarity_matrix(
             transcript_embeddings,
             broll_embeddings
         )
         state.similarity_matrix = similarity_matrix
         
-        matcher = SemanticMatcher()
-        matcher.similarity_threshold = settings.get("similarity_threshold", 0.35)
-        matcher.min_gap_seconds = settings.get("min_gap_seconds", 5.0)
-        matcher.max_insertions = settings.get("max_insertions", 6)
+        # Settings for matching
+        max_insertions = settings.get("max_insertions", 6)
+        min_gap = settings.get("min_gap_seconds", 3.0)  # Use 3.0 as default for better coverage
         
-        selected_matches = matcher.find_best_matches(
-            transcript_segments,
-            broll_descriptions,
-            similarity_matrix
+        selected_matches = []
+        
+        # Use Keyword Matcher directly (AI planner often rate-limited)
+        print("📝 Using Keyword Matcher for B-roll insertions...")
+        keyword_matcher = KeywordMatcher()
+        selected_matches = keyword_matcher.find_matches(
+            segments=transcript_segments,
+            broll_descriptions=broll_descriptions,
+            max_insertions=max_insertions,
+            min_gap_seconds=min_gap
         )
+        print(f"✓ Keyword Matcher returned {len(selected_matches)} insertions")
+        
+        # Log each insertion for debugging
+        for ins in selected_matches:
+            print(f"  - {ins.start_sec}s: {ins.broll_id} ({ins.confidence:.2f})")
+        
         state.selected_matches = selected_matches
         
         # Step 5: Generate Timeline

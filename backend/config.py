@@ -21,10 +21,21 @@ AROLL_DIR = UPLOADS_DIR / "aroll"
 BROLL_DIR = UPLOADS_DIR / "broll"
 TRANSCRIPTS_DIR = ARTIFACTS_DIR / "transcripts"
 CAPTIONS_DIR = ARTIFACTS_DIR / "captions"
+EMBEDDINGS_DIR = ARTIFACTS_DIR / "embeddings"
+MATCHING_DIR = ARTIFACTS_DIR / "matching"
 OUTPUT_DIR = ARTIFACTS_DIR / "output"
 
-# Create directories if they don't exist
-for dir_path in [AROLL_DIR, BROLL_DIR, TRANSCRIPTS_DIR, CAPTIONS_DIR, OUTPUT_DIR]:
+# Create all directories if they don't exist
+ALL_DIRS = [
+    AROLL_DIR, 
+    BROLL_DIR, 
+    TRANSCRIPTS_DIR, 
+    CAPTIONS_DIR, 
+    EMBEDDINGS_DIR,
+    MATCHING_DIR,
+    OUTPUT_DIR
+]
+for dir_path in ALL_DIRS:
     dir_path.mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
@@ -65,17 +76,17 @@ TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "openai").lower()  
 # =============================================================================
 # MATCHING SETTINGS
 # =============================================================================
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))
-MIN_GAP_SECONDS = float(os.getenv("MIN_GAP_SECONDS", "8.0"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.15"))  # Lowered for offline embeddings
+MIN_GAP_SECONDS = float(os.getenv("MIN_GAP_SECONDS", "3.0"))  # Minimum gap between insertions (reduced for more coverage)
 MAX_INSERTIONS = int(os.getenv("MAX_INSERTIONS", "6"))
-MIN_INSERTIONS = int(os.getenv("MIN_INSERTIONS", "3"))
+MIN_INSERTIONS = int(os.getenv("MIN_INSERTIONS", "2"))
 BROLL_MIN_DURATION = float(os.getenv("BROLL_MIN_DURATION", "2.0"))
 BROLL_MAX_DURATION = float(os.getenv("BROLL_MAX_DURATION", "4.0"))
 
 # Keywords that indicate critical speaking moments (avoid B-roll here)
+# Reduced list to avoid over-filtering
 CRITICAL_KEYWORDS = [
-    "important", "key point", "listen", "remember", "note this",
-    "crucial", "essential", "must", "never forget", "pay attention"
+    "listen carefully", "remember this", "never forget", "pay attention"
 ]
 
 # =============================================================================

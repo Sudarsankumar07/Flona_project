@@ -3,9 +3,15 @@ import React, { createContext, useContext, useReducer } from 'react';
 const AppContext = createContext();
 
 const initialState = {
-  // Upload state
+  // Input mode: 'file' or 'url'
+  inputMode: 'file',
+  
+  // Upload state (file mode)
   aroll: null, // { file, preview, duration }
   brolls: [], // [{ id, file, preview, metadata, duration }]
+  
+  // URL state (url mode)
+  urlMode: null, // { aroll: { url, metadata }, brolls: [{ id, url, metadata }] }
   
   // Config state
   config: {
@@ -29,6 +35,9 @@ const initialState = {
 
 function appReducer(state, action) {
   switch (action.type) {
+    case 'SET_INPUT_MODE':
+      return { ...state, inputMode: action.payload };
+    
     case 'SET_AROLL':
       return { ...state, aroll: action.payload };
     
@@ -54,6 +63,12 @@ function appReducer(state, action) {
     
     case 'CLEAR_BROLLS':
       return { ...state, brolls: [] };
+    
+    case 'SET_URL_DATA':
+      return { ...state, urlMode: action.payload, inputMode: 'url' };
+    
+    case 'CLEAR_URL_DATA':
+      return { ...state, urlMode: null };
     
     case 'SET_CONFIG':
       return {

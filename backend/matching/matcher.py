@@ -145,19 +145,15 @@ class SemanticMatcher:
             if keyword.lower() in text:
                 return False, f"Critical moment detected ('{keyword}')"
         
-        # Rule 3: Skip questions (usually need visual attention on speaker)
-        if text.strip().endswith("?"):
-            return False, "Question detected - viewer should see speaker"
-        
-        # Rule 4: Skip very short text (likely filler words)
+        # Rule 3: Skip very short text (likely filler words)
         word_count = len(text.split())
         if word_count < 3:
             return False, "Too few words (< 3 words)"
         
-        # Rule 5: Skip segments that seem like direct address to camera
+        # Rule 4: Skip segments that seem like direct address to camera
         direct_address_patterns = [
-            r"\b(you see|look at this|watch this|let me show you)\b",
-            r"\b(as you can see|you'll notice|you might)\b"
+            r"\b(look at this|watch this|let me show you)\b",
+            r"\b(as you can see|you'll notice)\b"
         ]
         for pattern in direct_address_patterns:
             if re.search(pattern, text):

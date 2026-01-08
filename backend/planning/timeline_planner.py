@@ -39,6 +39,116 @@ class TimelinePlanner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.matcher = SemanticMatcher()
     
+    def create_timeline(
+        self,
+        aroll_filename: str,
+        aroll_duration: float,
+        matches: List,  # Can be List[MatchResult] or List[BRollInsertion]
+        transcript_segments: List[TranscriptSegment],
+        broll_descriptions: List[BRollDescription],
+        processing_start_time: Optional[float] = None
+    ) -> TimelinePlan:
+        """
+        Create timeline from matches - handles both MatchResult and BRollInsertion types
+        
+        Args:
+            aroll_filename: Name of the A-roll file
+            aroll_duration: Duration of A-roll in seconds
+            matches: List of matches (MatchResult or BRollInsertion objects)
+            transcript_segments: All transcript segments
+            broll_descriptions: All B-roll descriptions
+            processing_start_time: Start time for calculating processing duration
+            
+        Returns:
+            Complete TimelinePlan object
+        """
+        insertions = []
+        
+        if not matches:
+            print("⚠ No matches provided to create_timeline")
+        else:
+            # Check if matches are already BRollInsertion objects
+            first_match = matches[0]
+            
+            if isinstance(first_match, BRollInsertion):
+                # Already BRollInsertion objects from KeywordMatcher or AIPlanner
+                insertions = list(matches)
+                print(f"✓ Using {len(insertions)} pre-built BRollInsertion objects")
+            elif hasattr(first_match, 'best_broll_id'):
+                # MatchResult objects from SemanticMatcher
+                insertions = self._convert_match_results(
+                    matches, transcript_segments, broll_descriptions
+                )
+                print(f"✓ Converted {len(insertions)} MatchResult objects to insertions")
+            else:
+                print(f"⚠ Unknown match type: {type(first_match)}")
+        
+        # Sort insertions by start time
+        insertions.sort(key=lambda x: x.start_sec)
+        
+        # Calculate processing time
+        processing_time = None
+        if processing_start_time:
+            processing_time = round(time.time() - processing_start_time, 2)
+        
+        # Create timeline plan
+        timeline = TimelinePlan(
+            aroll_filename=aroll_filename,
+            aroll_duration=round(aroll_duration, 2),
+            total_insertions=len(insertions),
+            insertions=insertions,
+            transcript_segments=transcript_segments,
+            broll_descriptions=broll_descriptions,
+            processing_time_sec=processing_time
+        )
+        
+        return timeline
+    
+    def _convert_match_results(
+        self,
+        matches: List[MatchResult],
+        segments: List[TranscriptSegment],
+        broll_descriptions: List[BRollDescription]
+    ) -> List[BRollInsertion]:
+        """Convert MatchResult objects to BRollInsertion objects"""
+        broll_lookup = {desc.broll_id: desc for desc in broll_descriptions}
+        segment_lookup = {seg.id: seg for seg in segments}
+        
+        insertions = []
+        
+        for match in matches:
+            if not match.best_broll_id or not match.is_suitable:
+                continue
+            
+            broll = broll_lookup.get(match.best_broll_id)
+            segment = segment_lookup.get(match.segment_id)
+            
+            if not broll or not segment:
+                continue
+            
+            # Calculate insertion timing
+            start_sec = segment.start + 0.3
+            duration_sec = self.matcher.calculate_insertion_duration(segment, broll)
+            reason = self.matcher.generate_reason(segment, broll, match.similarity_score)
+            
+            insertion = BRollInsertion(
+                start_sec=round(start_sec, 2),
+                duration_sec=duration_sec,
+                broll_id=broll.broll_id,
+                broll_filename=broll.filename,
+                confidence=round(match.similarity_score, 2),
+                reason=reason,
+                transcript_segment_id=segment.id,
+                transcript_text=segment.text
+            )
+            insertions.append(insertion)
+        
+        return insertions
+    
+    def save_timeline(self, timeline: TimelinePlan):
+        """Public method to save timeline"""
+        self._save_timeline(timeline)
+    
     def generate_timeline(
         self,
         aroll_filename: str,

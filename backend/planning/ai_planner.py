@@ -16,7 +16,7 @@ from config import get_vision_provider, GEMINI_API_KEY, OPENAI_API_KEY
 from schemas import TranscriptSegment, BRollDescription, BRollInsertion
 
 # OpenRouter API key (can also be in .env)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
 
 
 class AIInsertionPlanner:
@@ -104,10 +104,9 @@ class AIInsertionPlanner:
                 base_url="https://openrouter.ai/api/v1",
                 api_key=OPENROUTER_API_KEY
             )
-            # Use a fast, capable model via OpenRouter
-            # Good options: openai/gpt-4o-mini, meta-llama/llama-3.1-70b-instruct, anthropic/claude-3-haiku
-            self.model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
-            print(f"✓ Using OpenRouter model: {self.model_name}")
+            # Use FREE nvidia model with reasoning capability
+            self.model_name = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-nano-12b-v2-vl:free")
+            print(f"✓ Using OpenRouter FREE model: {self.model_name}")
         except ImportError:
             raise ImportError("openai not installed. Run: pip install openai")
     
@@ -145,8 +144,8 @@ class AIInsertionPlanner:
         else:
             response_text = self._query_openai(prompt)
         
-        # Parse AI response to extract insertions
-        insertions = self._parse_ai_response(response_text, broll_descriptions)
+        # Parse AI response to extract insertions (pass segments for context)
+        insertions = self._parse_ai_response(response_text, broll_descriptions, segments)
         
         print(f"✓ AI suggested {len(insertions)} insertions")
         return insertions
@@ -239,22 +238,29 @@ Analyze carefully and respond with ONLY the JSON object."""
             raise
     
     def _query_openrouter(self, prompt: str) -> str:
-        """Query OpenRouter API (uses OpenAI SDK format)"""
+        """Query OpenRouter API with FREE nvidia model and reasoning"""
         try:
+            # Use reasoning-enabled request for better B-roll insertion decisions
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You are an expert video editor who suggests B-roll insertions. Respond with JSON only."},
+                    {"role": "system", "content": "You are an expert video editor who suggests B-roll insertions. Analyze the transcript carefully and match B-rolls to relevant moments. Respond with JSON only."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=2048,
+                max_tokens=4096,
                 extra_headers={
                     "HTTP-Referer": "https://github.com/Sudarsankumar07/Flona_project",
                     "X-Title": "Smart B-Roll Inserter"
-                }
+                },
+                extra_body={"reasoning": {"enabled": True}}  # Enable reasoning for better analysis
             )
-            return response.choices[0].message.content
+            
+            result = response.choices[0].message
+            print(f"✓ AI Response received (reasoning enabled)")
+            
+            # Return the content (reasoning details are used internally by model)
+            return result.content
         except Exception as e:
             print(f"❌ OpenRouter API error: {e}")
             raise
@@ -262,7 +268,8 @@ Analyze carefully and respond with ONLY the JSON object."""
     def _parse_ai_response(
         self,
         response_text: str,
-        broll_descriptions: List[BRollDescription]
+        broll_descriptions: List[BRollDescription],
+        segments: List[TranscriptSegment] = None
     ) -> List[BRollInsertion]:
         """Parse AI response JSON into BRollInsertion objects"""
         
@@ -272,7 +279,10 @@ Analyze carefully and respond with ONLY the JSON object."""
             if json_text.startswith("```"):
                 # Remove markdown code block markers
                 lines = json_text.split("\n")
-                json_text = "\n".join(lines[1:-1]) if len(lines) > 2 else json_text
+                # Handle ```json or just ```
+                start_idx = 1
+                end_idx = -1 if lines[-1].strip() == "```" else len(lines)
+                json_text = "\n".join(lines[start_idx:end_idx])
             
             # Parse JSON
             data = json.loads(json_text)
@@ -281,14 +291,31 @@ Analyze carefully and respond with ONLY the JSON object."""
             # Convert to BRollInsertion objects
             insertions = []
             for ins in insertions_data:
-                # Find matching B-roll
+                # Find matching B-roll (use broll_id field)
                 broll = next(
-                    (b for b in broll_descriptions if b.id == ins["broll_id"]),
+                    (b for b in broll_descriptions if b.broll_id == ins["broll_id"]),
                     None
                 )
                 if not broll:
                     print(f"⚠ Warning: B-roll {ins['broll_id']} not found, skipping")
                     continue
+                
+                # Find closest transcript segment
+                segment_id = ins.get("segment_id", 1)
+                transcript_text = ""
+                if segments:
+                    # Find segment that contains this time
+                    start_time = float(ins["start_sec"])
+                    for seg in segments:
+                        if seg.start <= start_time <= seg.end:
+                            segment_id = seg.id
+                            transcript_text = seg.text
+                            break
+                    if not transcript_text and segments:
+                        # Use the closest segment
+                        closest = min(segments, key=lambda s: abs(s.start - start_time))
+                        segment_id = closest.id
+                        transcript_text = closest.text
                 
                 insertion = BRollInsertion(
                     start_sec=float(ins["start_sec"]),
@@ -296,7 +323,9 @@ Analyze carefully and respond with ONLY the JSON object."""
                     broll_id=ins["broll_id"],
                     broll_filename=broll.filename,
                     confidence=float(ins.get("confidence", 0.8)),
-                    reason=ins.get("reason", "AI suggested insertion")
+                    reason=ins.get("reason", "AI suggested insertion"),
+                    transcript_segment_id=segment_id,
+                    transcript_text=transcript_text
                 )
                 insertions.append(insertion)
             
@@ -307,10 +336,12 @@ Analyze carefully and respond with ONLY the JSON object."""
             
         except json.JSONDecodeError as e:
             print(f"❌ Failed to parse AI response as JSON: {e}")
-            print(f"Response was: {response_text[:200]}...")
+            print(f"Response was: {response_text[:500]}...")
             return []
         except Exception as e:
             print(f"❌ Error parsing AI response: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
 

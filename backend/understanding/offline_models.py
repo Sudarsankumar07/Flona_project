@@ -352,36 +352,67 @@ def get_video_duration(video_path: str) -> float:
 # MODEL MANAGEMENT FUNCTIONS
 # =============================================================================
 
-def check_models_available() -> dict:
-    """Check which offline models are available/downloaded"""
-    from huggingface_hub import HfApi, try_to_load_from_cache
+def get_cache_dir() -> str:
+    """Get the HuggingFace cache directory"""
+    from pathlib import Path
+    import os
     
+    # Check environment variable first
+    cache_dir = os.environ.get("HF_HOME") or os.environ.get("TRANSFORMERS_CACHE")
+    if cache_dir:
+        return cache_dir
+    
+    # Default location
+    return str(Path.home() / ".cache" / "huggingface" / "hub")
+
+
+def check_models_available() -> dict:
+    """
+    Check which offline models are available/downloaded.
+    Models are cached by HuggingFace and won't re-download if already present.
+    """
     status = {
         "vision_model": False,
         "embedding_model": False,
-        "whisper_model": False
+        "whisper_model": False,
+        "cache_dir": get_cache_dir()
     }
     
     try:
+        from huggingface_hub import try_to_load_from_cache
+        
         # Check vision model (BLIP)
         cached = try_to_load_from_cache("Salesforce/blip-image-captioning-base", "config.json")
-        status["vision_model"] = cached is not None
-    except:
-        pass
+        status["vision_model"] = cached is not None and cached != False
+    except Exception:
+        # Fallback: check if model folder exists
+        from pathlib import Path
+        cache_path = Path(get_cache_dir()) / "models--Salesforce--blip-image-captioning-base"
+        status["vision_model"] = cache_path.exists()
     
     try:
+        from huggingface_hub import try_to_load_from_cache
+        
         # Check embedding model
         cached = try_to_load_from_cache("sentence-transformers/all-MiniLM-L6-v2", "config.json")
-        status["embedding_model"] = cached is not None
-    except:
-        pass
+        status["embedding_model"] = cached is not None and cached != False
+    except Exception:
+        # Fallback: check if model folder exists
+        from pathlib import Path
+        cache_path = Path(get_cache_dir()) / "models--sentence-transformers--all-MiniLM-L6-v2"
+        status["embedding_model"] = cache_path.exists()
     
     return status
 
 
 def download_models():
-    """Download all offline models"""
-    print("Downloading offline models...")
+    """
+    Download all offline models. 
+    This only downloads if models aren't already cached.
+    HuggingFace automatically caches models to ~/.cache/huggingface/hub/
+    """
+    print("Downloading offline models (cached - won't re-download if exists)...")
+    print(f"  Cache location: {get_cache_dir()}")
     
     # Download vision model
     print("  Downloading BLIP vision model...")
@@ -389,7 +420,7 @@ def download_models():
         from transformers import BlipProcessor, BlipForConditionalGeneration
         BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
         BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-        print("  ✓ BLIP model downloaded")
+        print("  ✓ BLIP model ready (downloaded or cached)")
     except Exception as e:
         print(f"  ✗ BLIP download failed: {e}")
     
@@ -398,11 +429,11 @@ def download_models():
     try:
         from sentence_transformers import SentenceTransformer
         SentenceTransformer("all-MiniLM-L6-v2")
-        print("  ✓ Embedding model downloaded")
+        print("  ✓ Embedding model ready (downloaded or cached)")
     except Exception as e:
         print(f"  ✗ Embedding download failed: {e}")
     
-    print("Model download complete!")
+    print("Model setup complete!")
 
 
 # =============================================================================

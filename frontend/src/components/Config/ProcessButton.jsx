@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Loader2, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { uploadVideos, configureApi, startProcessing, getStatus, getTimeline } from '../../services/api';
+import { uploadVideos, uploadFromUrls, configureApi, startProcessing, getStatus, getTimeline } from '../../services/api';
 import toast from 'react-hot-toast';
 
 const STEPS = [
@@ -16,11 +16,14 @@ const STEPS = [
 
 export default function ProcessButton() {
   const { state, dispatch } = useApp();
-  const { aroll, brolls, config, processing } = state;
+  const { aroll, brolls, urlMode, inputMode, config, processing } = state;
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   
-  const canProcess = aroll && brolls.length > 0 && 
-    (config.provider === 'offline' || config.apiKey.length > 10);
+  // Check if we can process based on input mode
+  const canProcessFiles = inputMode === 'file' && aroll && brolls.length > 0;
+  const canProcessUrls = inputMode === 'url' && urlMode?.aroll?.url && urlMode?.brolls?.length > 0;
+  const hasApiConfig = config.provider === 'offline' || config.apiKey.length > 10;
+  const canProcess = (canProcessFiles || canProcessUrls) && hasApiConfig;
   
   const isProcessing = processing.status === 'processing' || processing.status === 'uploading';
   
@@ -34,14 +37,18 @@ export default function ProcessButton() {
     setCurrentStepIndex(0);
     
     try {
-      // Step 1: Upload videos
-      toast.loading('Uploading videos...', { id: 'process' });
-      
-      const uploadResult = await uploadVideos(
-        aroll.file,
-        brolls.map(b => b.file),
-        brolls.map(b => ({ id: b.id, metadata: b.metadata }))
-      );
+      // Step 1: Upload videos (based on input mode)
+      if (inputMode === 'url') {
+        toast.loading('Downloading videos from URLs...', { id: 'process' });
+        await uploadFromUrls(urlMode);
+      } else {
+        toast.loading('Uploading videos...', { id: 'process' });
+        await uploadVideos(
+          aroll.file,
+          brolls.map(b => b.file),
+          brolls.map(b => ({ id: b.id, metadata: b.metadata }))
+        );
+      }
       
       setCurrentStepIndex(1);
       dispatch({ 
@@ -62,48 +69,90 @@ export default function ProcessButton() {
       toast.loading('Processing videos...', { id: 'process' });
       
       const processResult = await startProcessing({
-        similarity_threshold: 0.35,
+        similarity_threshold: 0.15,
         max_insertions: 6,
         min_gap_seconds: 5.0,
       });
       
+      console.log('Process result:', processResult);
+      
       // Poll for status
       const jobId = processResult.job_id;
-      let completed = false;
       
-      while (!completed) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        const statusResult = await getStatus(jobId);
-        
-        // Update progress based on status
-        const stepMapping = {
-          'transcribing': { index: 2, progress: 35 },
-          'captioning': { index: 3, progress: 50 },
-          'embedding': { index: 4, progress: 65 },
-          'matching': { index: 5, progress: 80 },
-          'timeline': { index: 6, progress: 90 },
-        };
-        
-        const stepKey = Object.keys(stepMapping).find(k => 
-          statusResult.current_step?.toLowerCase().includes(k)
-        );
-        
-        if (stepKey) {
-          setCurrentStepIndex(stepMapping[stepKey].index);
+      if (!jobId) {
+        // If no job_id, the server might have processed synchronously
+        // Try to get the timeline directly
+        console.log('No job_id, trying to get timeline directly...');
+        try {
+          const timeline = await getTimeline();
+          dispatch({ type: 'SET_TIMELINE', payload: timeline });
           dispatch({ 
             type: 'SET_PROCESSING', 
-            payload: { 
-              progress: stepMapping[stepKey].progress, 
-              currentStep: statusResult.current_step 
-            } 
+            payload: { status: 'completed', progress: 100, currentStep: 'Complete!' } 
           });
+          toast.success('Timeline generated successfully!', { id: 'process' });
+          return;
+        } catch (e) {
+          throw new Error('No job ID returned from server and no timeline available');
         }
+      }
+      
+      let completed = false;
+      let pollAttempts = 0;
+      const maxPollAttempts = 60; // 2 minutes max
+      
+      while (!completed && pollAttempts < maxPollAttempts) {
+        pollAttempts++;
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
-        if (statusResult.status === 'completed') {
-          completed = true;
-        } else if (statusResult.status === 'failed') {
-          throw new Error(statusResult.error || 'Processing failed');
+        try {
+          const statusResult = await getStatus(jobId);
+          
+          // Update progress based on status
+          const stepMapping = {
+            'transcribing': { index: 2, progress: 35 },
+            'captioning': { index: 3, progress: 50 },
+            'embedding': { index: 4, progress: 65 },
+            'matching': { index: 5, progress: 80 },
+            'timeline': { index: 6, progress: 90 },
+          };
+          
+          const stepKey = Object.keys(stepMapping).find(k => 
+            statusResult.current_step?.toLowerCase().includes(k)
+          );
+          
+          if (stepKey) {
+            setCurrentStepIndex(stepMapping[stepKey].index);
+            dispatch({ 
+              type: 'SET_PROCESSING', 
+              payload: { 
+                progress: stepMapping[stepKey].progress, 
+                currentStep: statusResult.current_step 
+              } 
+            });
+          }
+          
+          if (statusResult.status === 'completed') {
+            completed = true;
+          } else if (statusResult.status === 'failed') {
+            throw new Error(statusResult.error || 'Processing failed');
+          }
+        } catch (pollError) {
+          // If job not found, check if timeline exists
+          if (pollError.response?.status === 404) {
+            try {
+              const timeline = await getTimeline();
+              dispatch({ type: 'SET_TIMELINE', payload: timeline });
+              dispatch({ 
+                type: 'SET_PROCESSING', 
+                payload: { status: 'completed', progress: 100, currentStep: 'Complete!' } 
+              });
+              toast.success('Timeline generated successfully!', { id: 'process' });
+              return;
+            } catch (e) {
+              // Continue polling
+            }
+          }
         }
       }
       
