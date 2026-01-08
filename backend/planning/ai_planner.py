@@ -46,12 +46,12 @@ class AIInsertionPlanner:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
             
-            # Try models in order of preference
+            # Try models in order of preference (updated for 2025)
             models_to_try = [
-                "gemini-2.0-flash-exp",
-                "gemini-1.5-flash",
-                "gemini-1.5-flash-8b",
-                "gemini-pro"
+                "gemini-2.5-flash",      # Best balance: stable, 65K output
+                "gemini-2.0-flash",       # Fast and reliable
+                "gemini-2.5-pro",         # Highest quality (more expensive)
+                "gemini-2.0-flash-exp",   # Experimental fallback
             ]
             
             for model_name in models_to_try:
